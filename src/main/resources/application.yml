@@ -1,0 +1,57 @@
+spring:
+  datasource:
+    dynamic:
+      primary: mysql      # 默认数据源 mysql
+      strict: false       # 未匹配到数据源时是否报错，这里放宽
+      datasource:
+        mysql:
+          url: jdbc:mysql://localhost:3306/notice_system?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=utf-8
+          username: root
+          password: 20050429pzylzy   # 建议后面用环境变量或配置文件加密
+          driver-class-name: com.mysql.cj.jdbc.Driver
+        pg:
+          url: jdbc:postgresql://localhost:5432/notice_system_pg
+          username: postgres
+          password: 20050429pzylzy
+          driver-class-name: org.postgresql.Driver
+        sqlserver:
+          url: jdbc:sqlserver://localhost:1433;databaseName=notice_system_sqlserver;encrypt=false
+          username: sa
+          password: 20050429pzylzy
+          driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+
+  mail:
+    host: smtp.qq.com        #  换成你实际邮箱服务的 SMTP，如 smtp.qq.com / smtp.163.com
+    port: 465                 # 465 一般走 SSL；若用 587 一般是 STARTTLS
+    username: 1798864119@qq.com    #  邮箱账号
+    password: dkjffeoursnkdcec   #  邮箱的“授权码”/“应用专用密码”，而不是登录密码
+    protocol: smtp            # 465 通常用 smtps；如果用 587，可以改成 smtp
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true      # 465 端口一般需要 SSL
+    default-encoding: UTF-8
+
+# 你自己的全局配置（对应 GlobalProperties）
+notice:
+  mail:
+    enabled: true                         # 是否开启冲突邮件告警
+    from: 1798864119@qq.com               #  发件人显示的邮箱（可与 spring.mail.username 一致）
+    subject-prefix: "[同步冲突告警]"       # 邮件标题前缀
+  sync:
+    retry:
+      enabled: true                       # 是否开启定时自动重试
+      max-retry-count: 3                  # 最大自动重试次数
+      fixed-delay-ms: 60000               # 每次重试任务间隔（毫秒），这里是 60 秒
+    full:
+      enabled: true                       # 是否开启定时全量同步
+      cron: "0 0 3 * * ?"                 # 定时全量同步 Cron 表达式（默认每天凌晨 3 点）
+      source-db: MYSQL                    # 全量同步的源库（MYSQL / PG / SQLSERVER）
+  security:
+    admin-role-name: 管理员               # 管理员角色名，用来找管理员用户发邮件
+
+
+
+
