@@ -6,18 +6,18 @@
 
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.notice.system</groupId>
-    <artifactId>notice-system</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
-    <name>notice-system</name>
+    <!-- 关键：声明父工程 -->
+    <parent>
+        <groupId>com.notice.system</groupId>
+        <artifactId>notice-system-parent</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
 
-    <!-- Spring Boot 3.x 使用 Java17 -->
-    <properties>
-        <java.version>17</java.version>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <spring.boot.version>3.5.8</spring.boot.version>
-    </properties>
+    <!-- 子模块自己的 artifactId -->
+    <artifactId>notice-system-backend</artifactId>
+    <name>notice-system-backend</name>
+    <packaging>jar</packaging>
 
     <dependencies>
 
@@ -55,7 +55,6 @@
             <artifactId>mssql-jdbc</artifactId>
         </dependency>
 
-
         <!-- Lombok（简化实体类代码） -->
         <dependency>
             <groupId>org.projectlombok</groupId>
@@ -68,15 +67,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
-
-        <!-- Spring Boot DevTools 热更新 -->
-<!--        <dependency>-->
-<!--            <groupId>org.springframework.boot</groupId>-->
-<!--            <artifactId>spring-boot-starter-devtools</artifactId>-->
-<!--            <scope>runtime</scope>-->
-<!--            <optional>true</optional>-->
-<!--        </dependency>-->
-
 
         <dependency>
             <groupId>org.springframework.security</groupId>
@@ -116,18 +106,6 @@
         </dependency>
 
     </dependencies>
-
-    <dependencyManagement>
-        <dependencies>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring.boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-        </dependencies>
-    </dependencyManagement>
 
     <build>
         <plugins>
