@@ -53,7 +53,6 @@ http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config;
 });
 
-
 http.interceptors.response.use(
   (response: AxiosResponse<Result<any>>) => {
     const config = response.config as HttpRequestConfig;
