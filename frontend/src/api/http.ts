@@ -1,5 +1,4 @@
 import axios, {
-  AxiosHeaders,
   type AxiosError,
   type AxiosInstance,
   type AxiosRequestConfig,
@@ -45,12 +44,7 @@ const http: HttpInstance = axios.create({
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = getToken();
   if (token) {
-    if (config.headers instanceof AxiosHeaders) {
-      config.headers.set('Authorization', token);
-    } else {
-      // @ts-ignore
-      config.headers = { ...(config.headers ?? {}), Authorization: token };
-    }
+    config.headers.set('Authorization', token);
   }
   return config;
 });
