@@ -4,6 +4,7 @@ import {
   type NavigationGuardNext,
   type RouteLocationNormalized,
   type RouteRecordNormalized,
+  type RouteRecordRaw,
 } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import AdminLayout from '../layouts/AdminLayout.vue';
@@ -25,86 +26,88 @@ declare module 'vue-router' {
   }
 }
 
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: LoginView,
+    meta: { requiresAuth: false },
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: RegisterView,
+    meta: { requiresAuth: false },
+  },
+  {
+    path: '/',
+    component: UserLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        redirect: '/notices',
+      },
+      {
+        path: 'notices',
+        name: 'Notices',
+        component: NoticesView,
+        meta: { requiresAuth: true },
+      },
+      {
+        path: 'notices/:id',
+        name: 'NoticeDetail',
+        component: NoticeDetailView,
+        meta: { requiresAuth: true },
+      },
+      {
+        path: 'profile',
+        name: 'Profile',
+        component: ProfileView,
+        meta: { requiresAuth: true },
+      },
+    ],
+  },
+  {
+    path: '/admin',
+    component: AdminLayout,
+    meta: { requiresAuth: true, requiresAdmin: true },
+    children: [
+      {
+        path: '',
+        redirect: '/admin/notices',
+      },
+      {
+        path: 'notices',
+        name: 'AdminNotices',
+        component: AdminNoticesView,
+        meta: { requiresAuth: true, requiresAdmin: true },
+      },
+      {
+        path: 'users',
+        name: 'AdminUsers',
+        component: AdminUsersView,
+        meta: { requiresAuth: true, requiresAdmin: true },
+      },
+      {
+        path: 'depts',
+        name: 'AdminDepts',
+        component: AdminDeptsView,
+        meta: { requiresAuth: true, requiresAdmin: true },
+      },
+      {
+        path: 'sync-logs',
+        name: 'AdminSyncLogs',
+        component: AdminSyncLogsView,
+        meta: { requiresAuth: true, requiresAdmin: true },
+      },
+    ],
+  },
+];
+
 const router = createRouter({
   history: createWebHistory(),
-  routes: [
-    {
-      path: '/login',
-      name: 'Login',
-      component: LoginView,
-      meta: { requiresAuth: false },
-    },
-    {
-      path: '/register',
-      name: 'Register',
-      component: RegisterView,
-      meta: { requiresAuth: false },
-    },
-    {
-      path: '/',
-      component: UserLayout,
-      meta: { requiresAuth: true },
-      children: [
-        {
-          path: '',
-          redirect: '/notices',
-        },
-        {
-          path: 'notices',
-          name: 'Notices',
-          component: NoticesView,
-          meta: { requiresAuth: true },
-        },
-        {
-          path: 'notices/:id',
-          name: 'NoticeDetail',
-          component: NoticeDetailView,
-          meta: { requiresAuth: true },
-        },
-        {
-          path: 'profile',
-          name: 'Profile',
-          component: ProfileView,
-          meta: { requiresAuth: true },
-        },
-      ],
-    },
-    {
-      path: '/admin',
-      component: AdminLayout,
-      meta: { requiresAuth: true, requiresAdmin: true },
-      children: [
-        {
-          path: '',
-          redirect: '/admin/notices',
-        },
-        {
-          path: 'notices',
-          name: 'AdminNotices',
-          component: AdminNoticesView,
-          meta: { requiresAuth: true, requiresAdmin: true },
-        },
-        {
-          path: 'users',
-          name: 'AdminUsers',
-          component: AdminUsersView,
-          meta: { requiresAuth: true, requiresAdmin: true },
-        },
-        {
-          path: 'depts',
-          name: 'AdminDepts',
-          component: AdminDeptsView,
-          meta: { requiresAuth: true, requiresAdmin: true },
-        },
-        {
-          path: 'sync-logs',
-          name: 'AdminSyncLogs',
-          component: AdminSyncLogsView,
-          meta: { requiresAuth: true, requiresAdmin: true },
-        },
-      ],
-    },
-  ],
+  routes,
 });
 
 const redirectToLogin = (to: RouteLocationNormalized, next: NavigationGuardNext): void => {
