@@ -45,14 +45,14 @@ const http: HttpInstance = axios.create({
 http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = getToken();
   if (token) {
-    if (config.headers instanceof AxiosHeaders) {
-      config.headers.set('Authorization', token);
-    } else {
-      config.headers = { ...(config.headers ?? {}), Authorization: token };
-    }
+    // 统一把 headers 规范成 AxiosHeaders，避免 TS2698
+    const headers = AxiosHeaders.from(config.headers ?? {});
+    headers.set('Authorization', token);
+    config.headers = headers;
   }
   return config;
 });
+
 
 http.interceptors.response.use(
   (response: AxiosResponse<Result<any>>) => {
