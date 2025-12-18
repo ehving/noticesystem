@@ -1,4 +1,11 @@
-import axios, { type AxiosError, type AxiosInstance, type AxiosRequestConfig, type AxiosResponse } from 'axios';
+import axios, {
+  AxiosHeaders,
+  type AxiosError,
+  type AxiosInstance,
+  type AxiosRequestConfig,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios';
 import { clearToken, getToken } from '../utils/storage';
 import type { Result } from '../types/common';
 
@@ -16,11 +23,14 @@ const http: HttpInstance = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/',
 });
 
-http.interceptors.request.use((config: HttpRequestConfig) => {
+http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   const token = getToken();
   if (token) {
-    config.headers = config.headers ?? {};
-    config.headers.Authorization = token;
+    if (config.headers instanceof AxiosHeaders) {
+      config.headers.set('Authorization', token);
+    } else {
+      config.headers = { ...(config.headers ?? {}), Authorization: token };
+    }
   }
   return config;
 });
@@ -60,10 +70,11 @@ http.interceptors.response.use(
   },
 );
 
-export const request = <T = any>(config: HttpRequestConfig): Promise<T> =>
-  http.request<any, T>(config);
+export const request = <T = any>(config: HttpRequestConfig): Promise<T> => http.request<any, T>(config);
 
-export const requestRaw = <T = any>(config: HttpRequestConfig): Promise<Result<T>> =>
-  http.request<any, Result<T>>({ ...config, raw: true });
+export const requestRaw = <T = any>(config: HttpRequestConfig): Promise<Result<T>> => {
+  const mergedConfig: HttpRequestConfig = { ...config, raw: true };
+  return http.request<any, Result<T>>(mergedConfig);
+};
 
 export default http;
