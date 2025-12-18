@@ -48,7 +48,6 @@ http.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     if (config.headers instanceof AxiosHeaders) {
       config.headers.set('Authorization', token);
     } else {
-      // @ts-ignore
       config.headers = { ...(config.headers ?? {}), Authorization: token };
     }
   }
