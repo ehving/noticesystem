@@ -28,9 +28,9 @@ public final class SecurityPaths {
         }
 
         // 2) 公告：只放行 GET
-        if ("GET".equalsIgnoreCase(method) && uri.startsWith("/api/notices")) {
+        /*if ("GET".equalsIgnoreCase(method) && uri.startsWith("/api/notices")) {
             return true;
-        }
+        }*/
 
         return false;
     }
