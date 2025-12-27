@@ -1,4 +1,4 @@
-export type NoticeLevel = 'NORMAL' | 'IMPORTANT' | 'URGENT'
+import type {NoticeLevel} from "@/types/enums/notice.ts";
 
 export interface Notice {
   id: string

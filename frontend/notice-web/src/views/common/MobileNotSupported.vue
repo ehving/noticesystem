@@ -11,7 +11,7 @@ const toLogin = () => {
 }
 
 const toMobileReport = () => {
-  router.push('/m/dashboard')
+  router.push('/m/MSyncLogReport')
 }
 
 const logout = () => {
@@ -25,7 +25,7 @@ const logout = () => {
     <el-result
       icon="warning"
       title="移动端仅提供管理员报表"
-      sub-title="公告/个人中心/管理端请在电脑端访问"
+      sub-title="公告 / 个人中心 / 管理端请在电脑端访问"
     >
       <template #extra>
         <div class="actions">

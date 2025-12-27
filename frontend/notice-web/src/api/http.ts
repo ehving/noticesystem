@@ -7,10 +7,13 @@ import axios, {
 import { getToken, clearToken } from '@/utils/auth'
 import * as message from '@/utils/message'
 import type { Result } from '@/types/result'
+import { toLocalDateTimeParam } from '@/utils/time'
 
 type NavigateFn = (path: string) => void
 
 let navigate: NavigateFn | null = null
+
+
 
 export const setNavigate = (fn: NavigateFn) => {
   navigate = fn
@@ -35,6 +38,34 @@ const isResultShape = (payload: unknown): payload is Result<unknown> => {
   return isRecord(payload) && 'code' in payload && 'msg' in payload
 }
 
+const normalizeDateTimeKeys = (obj: any) => {
+  if (!obj || typeof obj !== 'object') return
+
+  // 数组
+  if (Array.isArray(obj)) {
+    obj.forEach(normalizeDateTimeKeys)
+    return
+  }
+
+  for (const key of Object.keys(obj)) {
+    const val = obj[key]
+
+    // 只要遇到 beginTime/endTime 就规范化
+    if (key === 'beginTime' || key === 'endTime') {
+      const s = toLocalDateTimeParam(val)
+      // 只在能转成功时覆盖，避免把奇怪值变成 undefined 导致过滤失效
+      if (s) obj[key] = s
+      continue
+    }
+
+    // 继续递归
+    if (val && typeof val === 'object') {
+      normalizeDateTimeKeys(val)
+    }
+  }
+}
+
+
 const extractMsg = (payload: unknown): string | undefined => {
   if (typeof payload === 'string') return payload
   if (isRecord(payload)) {
@@ -55,8 +86,18 @@ instance.interceptors.request.use((config) => {
     config.headers = config.headers ?? {}
     config.headers.Authorization = token
   }
+
+  //  全局统一把 beginTime/endTime 转成 LocalDateTime 可解析的 ISO 字符串
+  if (config.data && typeof config.data === 'object') {
+    normalizeDateTimeKeys(config.data)
+  }
+  if (config.params && typeof config.params === 'object') {
+    normalizeDateTimeKeys(config.params)
+  }
+
   return config
 })
+
 
 instance.interceptors.response.use(
   (response: AxiosResponse) => response,

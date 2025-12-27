@@ -1,13 +1,9 @@
 package com.notice.system.sync;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.notice.system.entity.Dept;
-import com.notice.system.entity.Notice;
-import com.notice.system.entity.NoticeRead;
-import com.notice.system.entity.NoticeTargetDept;
-import com.notice.system.entity.Role;
-import com.notice.system.entity.SyncLog;
-import com.notice.system.entity.User;
+import com.notice.system.entity.*;
+import com.notice.system.entityEnum.DatabaseType;
+import com.notice.system.entityEnum.SyncEntityType;
 import com.notice.system.mapper.mysql.*;
 import com.notice.system.mapper.pg.*;
 import com.notice.system.mapper.sqlserver.*;
@@ -18,172 +14,126 @@ import org.springframework.stereotype.Component;
 
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-/**
- * 多库同步元数据注册中心：
- *  - 为每一种 SyncEntityType 绑定三库 Mapper + 主键获取方法
- *  - 供 SyncExecutor / SyncService / MultiDbSyncServiceImpl 使用
- */
+/** 维护每个实体在三库的 Mapper 映射与主键提取方式。 */
 @Component
 @RequiredArgsConstructor
 public class SyncMetadataRegistry {
 
-    // ======== 注入各实体在三库中的 Mapper ========
-
-    // ROLE
     private final RoleMysqlMapper roleMysqlMapper;
     private final RolePgMapper rolePgMapper;
     private final RoleSqlserverMapper roleSqlserverMapper;
 
-    // USER
     private final UserMysqlMapper userMysqlMapper;
     private final UserPgMapper userPgMapper;
     private final UserSqlserverMapper userSqlserverMapper;
 
-    // DEPT
     private final DeptMysqlMapper deptMysqlMapper;
     private final DeptPgMapper deptPgMapper;
     private final DeptSqlserverMapper deptSqlserverMapper;
 
-    // NOTICE
     private final NoticeMysqlMapper noticeMysqlMapper;
     private final NoticePgMapper noticePgMapper;
     private final NoticeSqlserverMapper noticeSqlserverMapper;
 
-    // NOTICE_TARGET_DEPT
     private final NoticeTargetDeptMysqlMapper noticeTargetDeptMysqlMapper;
     private final NoticeTargetDeptPgMapper noticeTargetDeptPgMapper;
     private final NoticeTargetDeptSqlserverMapper noticeTargetDeptSqlserverMapper;
 
-    // NOTICE_READ
     private final NoticeReadMysqlMapper noticeReadMysqlMapper;
     private final NoticeReadPgMapper noticeReadPgMapper;
     private final NoticeReadSqlserverMapper noticeReadSqlserverMapper;
 
-    // SYNC_LOG
     private final SyncLogMysqlMapper syncLogMysqlMapper;
     private final SyncLogPgMapper syncLogPgMapper;
     private final SyncLogSqlserverMapper syncLogSqlserverMapper;
 
-    // ======== 实体同步定义注册表 ========
+    private final SyncConflictMysqlMapper syncConflictMysqlMapper;
+    private final SyncConflictPgMapper syncConflictPgMapper;
+    private final SyncConflictSqlserverMapper syncConflictSqlserverMapper;
 
-    private final Map<SyncEntityType, EntitySyncDefinition<?>> registry =
-            new EnumMap<>(SyncEntityType.class);
+    private final SyncConflictItemMysqlMapper syncConflictItemMysqlMapper;
+    private final SyncConflictItemPgMapper syncConflictItemPgMapper;
+    private final SyncConflictItemSqlserverMapper syncConflictItemSqlserverMapper;
+
+    private final Map<SyncEntityType, EntitySyncDefinition<?>> registry = new EnumMap<>(SyncEntityType.class);
 
     @PostConstruct
     public void init() {
+        register(SyncEntityType.NOTICE, "NOTICE", Notice::new, Notice::getId,
+                noticeMysqlMapper, noticePgMapper, noticeSqlserverMapper);
 
-        // ===== NOTICE =====
-        EntitySyncDefinition<Notice> noticeDef = new EntitySyncDefinition<>(
-                "NOTICE",
-                Notice::new,
-                Notice::getId
-        );
-        noticeDef.addMapper(DatabaseType.MYSQL, noticeMysqlMapper);
-        noticeDef.addMapper(DatabaseType.PG, noticePgMapper);
-        noticeDef.addMapper(DatabaseType.SQLSERVER, noticeSqlserverMapper);
-        registry.put(SyncEntityType.NOTICE, noticeDef);
+        register(SyncEntityType.USER, "USER", User::new, User::getId,
+                userMysqlMapper, userPgMapper, userSqlserverMapper);
 
-        // ===== USER =====
-        EntitySyncDefinition<User> userDef = new EntitySyncDefinition<>(
-                "USER",
-                User::new,
-                User::getId
-        );
-        userDef.addMapper(DatabaseType.MYSQL, userMysqlMapper);
-        userDef.addMapper(DatabaseType.PG, userPgMapper);
-        userDef.addMapper(DatabaseType.SQLSERVER, userSqlserverMapper);
-        registry.put(SyncEntityType.USER, userDef);
+        register(SyncEntityType.ROLE, "ROLE", Role::new, Role::getId,
+                roleMysqlMapper, rolePgMapper, roleSqlserverMapper);
 
-        // ===== ROLE =====
-        EntitySyncDefinition<Role> roleDef = new EntitySyncDefinition<>(
-                "ROLE",
-                Role::new,
-                Role::getId
-        );
-        roleDef.addMapper(DatabaseType.MYSQL, roleMysqlMapper);
-        roleDef.addMapper(DatabaseType.PG, rolePgMapper);
-        roleDef.addMapper(DatabaseType.SQLSERVER, roleSqlserverMapper);
-        registry.put(SyncEntityType.ROLE, roleDef);
+        register(SyncEntityType.DEPT, "DEPT", Dept::new, Dept::getId,
+                deptMysqlMapper, deptPgMapper, deptSqlserverMapper);
 
-        // ===== DEPT =====
-        EntitySyncDefinition<Dept> deptDef = new EntitySyncDefinition<>(
-                "DEPT",
-                Dept::new,
-                Dept::getId
-        );
-        deptDef.addMapper(DatabaseType.MYSQL, deptMysqlMapper);
-        deptDef.addMapper(DatabaseType.PG, deptPgMapper);
-        deptDef.addMapper(DatabaseType.SQLSERVER, deptSqlserverMapper);
-        registry.put(SyncEntityType.DEPT, deptDef);
+        register(SyncEntityType.NOTICE_TARGET_DEPT, "NOTICE_TARGET_DEPT", NoticeTargetDept::new, NoticeTargetDept::getId,
+                noticeTargetDeptMysqlMapper, noticeTargetDeptPgMapper, noticeTargetDeptSqlserverMapper);
 
-        // ===== NOTICE_TARGET_DEPT =====
-        EntitySyncDefinition<NoticeTargetDept> ntdDef = new EntitySyncDefinition<>(
-                "NOTICE_TARGET_DEPT",
-                NoticeTargetDept::new,
-                NoticeTargetDept::getId
-        );
-        ntdDef.addMapper(DatabaseType.MYSQL, noticeTargetDeptMysqlMapper);
-        ntdDef.addMapper(DatabaseType.PG, noticeTargetDeptPgMapper);
-        ntdDef.addMapper(DatabaseType.SQLSERVER, noticeTargetDeptSqlserverMapper);
-        registry.put(SyncEntityType.NOTICE_TARGET_DEPT, ntdDef);
+        register(SyncEntityType.NOTICE_READ, "NOTICE_READ", NoticeRead::new, NoticeRead::getId,
+                noticeReadMysqlMapper, noticeReadPgMapper, noticeReadSqlserverMapper);
 
-        // ===== NOTICE_READ =====
-        EntitySyncDefinition<NoticeRead> nrDef = new EntitySyncDefinition<>(
-                "NOTICE_READ",
-                NoticeRead::new,
-                NoticeRead::getId
-        );
-        nrDef.addMapper(DatabaseType.MYSQL, noticeReadMysqlMapper);
-        nrDef.addMapper(DatabaseType.PG, noticeReadPgMapper);
-        nrDef.addMapper(DatabaseType.SQLSERVER, noticeReadSqlserverMapper);
-        registry.put(SyncEntityType.NOTICE_READ, nrDef);
+        register(SyncEntityType.SYNC_LOG, "SYNC_LOG", SyncLog::new, SyncLog::getId,
+                syncLogMysqlMapper, syncLogPgMapper, syncLogSqlserverMapper);
 
-        // ===== SYNC_LOG =====
-        EntitySyncDefinition<SyncLog> logDef = new EntitySyncDefinition<>(
-                "SYNC_LOG",
-                SyncLog::new,
-                SyncLog::getId
-        );
-        logDef.addMapper(DatabaseType.MYSQL, syncLogMysqlMapper);
-        logDef.addMapper(DatabaseType.PG, syncLogPgMapper);
-        logDef.addMapper(DatabaseType.SQLSERVER, syncLogSqlserverMapper);
-        registry.put(SyncEntityType.SYNC_LOG, logDef);
+        register(SyncEntityType.SYNC_CONFLICT, "SYNC_CONFLICT", SyncConflict::new, SyncConflict::getId,
+                syncConflictMysqlMapper, syncConflictPgMapper, syncConflictSqlserverMapper);
+
+        register(SyncEntityType.SYNC_CONFLICT_ITEM, "SYNC_CONFLICT_ITEM", SyncConflictItem::new, SyncConflictItem::getId,
+                syncConflictItemMysqlMapper, syncConflictItemPgMapper, syncConflictItemSqlserverMapper);
     }
 
+    /** 获取指定实体的同步定义（未注册则抛异常）。 */
     @SuppressWarnings("unchecked")
     public <T> EntitySyncDefinition<T> getDefinition(SyncEntityType entityType) {
-        return (EntitySyncDefinition<T>) registry.get(entityType);
+        Objects.requireNonNull(entityType, "entityType must not be null");
+        EntitySyncDefinition<?> def = registry.get(entityType);
+        if (def == null) {
+            throw new IllegalArgumentException("No EntitySyncDefinition registered for " + entityType);
+        }
+        return (EntitySyncDefinition<T>) def;
     }
 
+    /** 判断是否注册了该实体的同步定义。 */
     public boolean supports(SyncEntityType entityType) {
         return registry.containsKey(entityType);
     }
 
+    private <T> void register(
+            SyncEntityType type,
+            String entityName,
+            Supplier<T> supplier,
+            Function<T, String> idGetter,
+            BaseMapper<T> mysqlMapper,
+            BaseMapper<T> pgMapper,
+            BaseMapper<T> sqlserverMapper
+    ) {
+        EntitySyncDefinition<T> def = new EntitySyncDefinition<>(entityName, supplier, idGetter);
+        def.addMapper(DatabaseType.MYSQL, mysqlMapper);
+        def.addMapper(DatabaseType.PG, pgMapper);
+        def.addMapper(DatabaseType.SQLSERVER, sqlserverMapper);
+        registry.put(type, def);
+    }
+
     @Data
     public static class EntitySyncDefinition<T> {
-        /**
-         * 实体名称（日志用）
-         */
+        /** 业务实体名（用于日志/展示）。 */
         private final String entityName;
-
-        /**
-         * 实例构造器（目前用得不多，保留以备扩展）
-         */
+        /** 预留：用于某些场景动态构造实体。 */
         private final Supplier<T> entitySupplier;
-
-        /**
-         * ID 获取函数，例如 User::getId
-         */
+        /** 提取实体主键字符串的函数。 */
         private final Function<T, String> idGetter;
 
-        /**
-         * 三个库对应的 Mapper
-         */
-        private final Map<DatabaseType, BaseMapper<T>> mapperByDb =
-                new EnumMap<>(DatabaseType.class);
+        /** 三库对应的 Mapper。 */
+        private final Map<DatabaseType, BaseMapper<T>> mapperByDb = new EnumMap<>(DatabaseType.class);
 
         public void addMapper(DatabaseType db, BaseMapper<T> mapper) {
             mapperByDb.put(db, mapper);
@@ -194,6 +144,7 @@ public class SyncMetadataRegistry {
         }
     }
 }
+
 
 
 

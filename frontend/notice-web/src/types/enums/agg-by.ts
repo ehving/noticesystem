@@ -1,0 +1,13 @@
+export enum SyncLogAggBy {
+  STATUS = 'STATUS',
+  ENTITY_TYPE = 'ENTITY_TYPE',
+  ACTION = 'ACTION',
+  SOURCE_DB = 'SOURCE_DB',
+  TARGET_DB = 'TARGET_DB',
+}
+
+export enum SyncConflictAggBy {
+  STATUS = 'STATUS',
+  CONFLICT_TYPE = 'CONFLICT_TYPE',
+  ENTITY_TYPE = 'ENTITY_TYPE',
+}

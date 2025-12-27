@@ -1,23 +1,23 @@
 package com.notice.system.service.impl;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
-import com.notice.system.support.event.SyncLogEvent;
+import com.notice.system.entityEnum.DatabaseType;
+import com.notice.system.entityEnum.SyncAction;
+import com.notice.system.entityEnum.SyncEntityType;
+import com.notice.system.entityEnum.SyncLogStatus;
 import com.notice.system.service.SyncService;
-import com.notice.system.sync.DatabaseType;
-import com.notice.system.sync.SyncAction;
-import com.notice.system.sync.SyncEntityType;
+import com.notice.system.support.event.SyncBatchPostCheckEvent;
+import com.notice.system.support.event.SyncLogEvent;
 import com.notice.system.sync.SyncExecutor;
 import com.notice.system.sync.SyncMetadataRegistry;
+import com.notice.system.sync.SyncStatusDecider;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
-import java.util.Collection;
-import java.util.EnumMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.function.Function;
 
 @Slf4j
@@ -31,13 +31,18 @@ public class SyncServiceImpl implements SyncService {
 
     private final Map<DatabaseType, SyncExecutor> executorMap = new EnumMap<>(DatabaseType.class);
 
+    private enum LogMode {
+        NONE,        // 不写任何日志（retry 场景）
+        FAIL_ONLY,   // 只写失败日志（submitSync 的“先 apply 后统一写 success”）
+        ALL          // 成功失败都写（syncToTarget 场景）
+    }
+
     @PostConstruct
     public void init() {
         for (SyncExecutor executor : executors) {
             DatabaseType targetDb = executor.targetDb();
             executorMap.put(targetDb, executor);
-            log.info("[SYNC] 注册同步执行器：targetDb={}，executor={}",
-                    targetDb, executor.getClass().getSimpleName());
+            log.info("[SYNC] executor registered: targetDb={}, impl={}", targetDb, executor.getClass().getSimpleName());
         }
     }
 
@@ -47,14 +52,53 @@ public class SyncServiceImpl implements SyncService {
                            SyncAction action,
                            DatabaseType sourceDb) {
 
-        DatabaseType realSource = (sourceDb == null ? DatabaseType.MYSQL : sourceDb);
+        DatabaseType realSource = useDb(sourceDb);
 
-        executorMap.forEach((targetDb, executor) -> {
+        // targetDb -> applyOk（按遍历顺序保留输出稳定性）
+        Map<DatabaseType, Boolean> applyOk = new LinkedHashMap<>();
+
+        for (Map.Entry<DatabaseType, SyncExecutor> e : executorMap.entrySet()) {
+            DatabaseType targetDb = e.getKey();
             if (targetDb == realSource) {
-                return;
+                continue;
             }
-            // 正常业务：需要记日志
-            doSyncOneTarget(entityType, entityId, action, realSource, targetDb, executor, true);
+            boolean ok = syncOneTarget(entityType, entityId, action, realSource, targetDb, e.getValue(), LogMode.FAIL_ONLY);
+            applyOk.put(targetDb, ok);
+        }
+
+        // 不需要做 post-check 的场景：直接对成功目标写 SUCCESS
+        if (!allowWriteSyncLog(entityType) || action == SyncAction.DELETE) {
+            applyOk.forEach((targetDb, ok) -> {
+                if (ok) {
+                    publishLog(entityType, entityId, action, realSource, targetDb, SyncLogStatus.SUCCESS, null, null);
+                }
+            });
+            return;
+        }
+
+        // 全部失败：失败日志已在 syncOneTarget 中写过
+        boolean anyOk = applyOk.values().stream().anyMatch(Boolean::booleanValue);
+        if (!anyOk) {
+            return;
+        }
+
+        // 一次提交结束后统一触发 post-check（生成冲突工单等）
+        SyncBatchPostCheckEvent ev = new SyncBatchPostCheckEvent(entityType, entityId, action, realSource, applyOk);
+        eventPublisher.publishEvent(ev);
+
+        String conflictId = ev.getConflictId();
+
+        // 对同步成功的目标库写 SUCCESS/CONFLICT
+        applyOk.forEach((targetDb, ok) -> {
+            if (!ok) return;
+
+            if (conflictId != null) {
+                publishLog(entityType, entityId, action, realSource, targetDb,
+                        SyncLogStatus.CONFLICT, "post-check detected mismatch, conflict created", conflictId);
+            } else {
+                publishLog(entityType, entityId, action, realSource, targetDb,
+                        SyncLogStatus.SUCCESS, null, null);
+            }
         });
     }
 
@@ -63,7 +107,6 @@ public class SyncServiceImpl implements SyncService {
                                 Collection<String> entityIds,
                                 SyncAction action,
                                 DatabaseType sourceDb) {
-
         if (entityIds == null || entityIds.isEmpty()) {
             return;
         }
@@ -72,196 +115,148 @@ public class SyncServiceImpl implements SyncService {
         }
     }
 
-    /**
-     * 正常业务使用：同步到指定目标库，并记录同步日志
-     */
+    /** 正常业务：同步到指定目标库并写日志。 */
     @Override
     public boolean syncToTarget(SyncEntityType entityType,
                                 String entityId,
                                 SyncAction action,
                                 DatabaseType sourceDb,
                                 DatabaseType targetDb) {
-        return doSyncToTarget(entityType, entityId, action, sourceDb, targetDb, true);
+        return doSyncToTarget(entityType, entityId, action, sourceDb, targetDb, LogMode.ALL);
     }
 
-    /**
-     * 重试使用：只做同步动作，不再生成新的 SyncLog 记录
-     */
+    /** 重试/修复：只执行同步，不生成新日志。 */
     @Override
     public boolean syncToTargetWithoutLog(SyncEntityType entityType,
                                           String entityId,
                                           SyncAction action,
                                           DatabaseType sourceDb,
                                           DatabaseType targetDb) {
-        return doSyncToTarget(entityType, entityId, action, sourceDb, targetDb, false);
+        return doSyncToTarget(entityType, entityId, action, sourceDb, targetDb, LogMode.NONE);
     }
 
-    /**
-     * 统一封装 syncToTarget 的公共逻辑，通过 writeLog 开关控制是否记日志
-     */
     private boolean doSyncToTarget(SyncEntityType entityType,
                                    String entityId,
                                    SyncAction action,
                                    DatabaseType sourceDb,
                                    DatabaseType targetDb,
-                                   boolean writeLog) {
+                                   LogMode logMode) {
 
-        DatabaseType realSource = (sourceDb == null ? DatabaseType.MYSQL : sourceDb);
-
+        DatabaseType realSource = useDb(sourceDb);
         if (targetDb == null) {
-            log.warn("[SYNC] syncToTarget 时 targetDb 为 null，跳过，entityType={}, id={}",
-                    entityType, entityId);
             return false;
         }
-
         if (targetDb == realSource) {
-            log.info("[SYNC] syncToTarget 源库与目标库相同（{}），无需同步，entityType={}, id={}",
-                    targetDb, entityType, entityId);
             return true;
         }
 
         SyncExecutor executor = executorMap.get(targetDb);
         if (executor == null) {
-            log.warn("[SYNC] 未找到目标库 {} 的执行器，entityType={}, id={}",
-                    targetDb, entityType, entityId);
+            log.warn("[SYNC] executor not found: targetDb={}, entityType={}, id={}", targetDb, entityType, entityId);
             return false;
         }
 
-        return doSyncOneTarget(entityType, entityId, action, realSource, targetDb, executor, writeLog);
+        return syncOneTarget(entityType, entityId, action, realSource, targetDb, executor, logMode);
     }
 
     @Override
-    public void fullSyncEntityFromSource(SyncEntityType entityType,
-                                         DatabaseType sourceDb) {
+    public void fullSyncEntityFromSource(SyncEntityType entityType, DatabaseType sourceDb) {
+        DatabaseType realSource = useDb(sourceDb);
 
-        DatabaseType realSource = (sourceDb == null ? DatabaseType.MYSQL : sourceDb);
-
-        SyncMetadataRegistry.EntitySyncDefinition<?> def =
-                metadataRegistry.getDefinition(entityType);
-        if (def == null) {
-            log.warn("[SYNC] fullSyncEntityFromSource 未找到实体 {} 的同步定义，sourceDb={}",
-                    entityType, realSource);
-            return;
-        }
-
+        SyncMetadataRegistry.EntitySyncDefinition<?> def = metadataRegistry.getDefinition(entityType);
         BaseMapper<?> sourceMapper = def.getMapper(realSource);
         if (sourceMapper == null) {
-            log.warn("[SYNC] fullSyncEntityFromSource 源库 {} 未配置实体 {} 的 Mapper",
-                    realSource, entityType);
-            return;
+            throw new IllegalStateException("Source mapper not configured: entityType=" + entityType + ", db=" + realSource);
         }
 
         @SuppressWarnings("unchecked")
         List<Object> list = (List<Object>) sourceMapper.selectList(null);
         if (list == null || list.isEmpty()) {
-            log.info("[SYNC] fullSyncEntityFromSource 源库 {} 下实体 {} 无数据可同步",
-                    realSource, entityType);
+            log.info("[SYNC] fullSyncEntityFromSource empty: entityType={}, sourceDb={}", entityType, realSource);
             return;
         }
 
         @SuppressWarnings("unchecked")
-        Function<Object, String> idGetter =
-                (Function<Object, String>) def.getIdGetter();
+        Function<Object, String> idGetter = (Function<Object, String>) def.getIdGetter();
 
-        log.info("[SYNC] fullSyncEntityFromSource 开始全量同步，entityType={}, sourceDb={}, total={}",
-                entityType, realSource, list.size());
-
+        log.info("[SYNC] fullSyncEntityFromSource start: entityType={}, sourceDb={}, total={}", entityType, realSource, list.size());
         for (Object entity : list) {
             String id = idGetter.apply(entity);
-            if (id == null) {
-                continue;
+            if (id != null && !id.isBlank()) {
+                submitSync(entityType, id, SyncAction.UPDATE, realSource);
             }
-            // 全量同步是正常业务，同样需要记日志
-            submitSync(entityType, id, SyncAction.UPDATE, realSource);
         }
-
-        log.info("[SYNC] fullSyncEntityFromSource 结束，entityType={}, sourceDb={}",
-                entityType, realSource);
+        log.info("[SYNC] fullSyncEntityFromSource done: entityType={}, sourceDb={}", entityType, realSource);
     }
 
     @Override
     public void fullSyncAllFromSource(DatabaseType sourceDb) {
-        DatabaseType realSource = (sourceDb == null ? DatabaseType.MYSQL : sourceDb);
-
-        log.info("[SYNC] fullSyncAllFromSource 开始，全量同步所有实体，sourceDb={}", realSource);
+        DatabaseType realSource = useDb(sourceDb);
+        log.info("[SYNC] fullSyncAllFromSource start: sourceDb={}", realSource);
 
         for (SyncEntityType type : SyncEntityType.values()) {
-            if (!metadataRegistry.supports(type)) {
-                continue;
+            if (metadataRegistry.supports(type)) {
+                fullSyncEntityFromSource(type, realSource);
             }
-            fullSyncEntityFromSource(type, realSource);
         }
 
-        log.info("[SYNC] fullSyncAllFromSource 完成，sourceDb={}", realSource);
+        log.info("[SYNC] fullSyncAllFromSource done: sourceDb={}", realSource);
     }
 
-    /**
-     * 同步一条记录到指定目标库，并根据 writeLog 决定是否通过事件机制记录日志
-     */
-    private boolean doSyncOneTarget(SyncEntityType entityType,
-                                    String entityId,
-                                    SyncAction action,
-                                    DatabaseType sourceDb,
-                                    DatabaseType targetDb,
-                                    SyncExecutor executor,
-                                    boolean writeLog) {
+    /** 执行单目标库同步，并按日志模式决定是否写 SyncLog。 */
+    private boolean syncOneTarget(SyncEntityType entityType,
+                                  String entityId,
+                                  SyncAction action,
+                                  DatabaseType sourceDb,
+                                  DatabaseType targetDb,
+                                  SyncExecutor executor,
+                                  LogMode logMode) {
 
         try {
             executor.applyOne(entityType, action, entityId, sourceDb);
 
-            // 避免“日志同步日志”的死循环：SYNC_LOG 本身不同步记录日志
-            if (writeLog && entityType != SyncEntityType.SYNC_LOG) {
-                publishSuccessLog(entityType, entityId, action, sourceDb, targetDb);
+            if (logMode == LogMode.ALL && allowWriteSyncLog(entityType)) {
+                publishLog(entityType, entityId, action, sourceDb, targetDb, SyncLogStatus.SUCCESS, null, null);
             }
             return true;
 
         } catch (Exception ex) {
-            log.warn("同步失败：entityType={}，id={}，action={}，{} -> {}，错误={}",
+            log.warn("[SYNC] failed: entityType={}, id={}, action={}, {} -> {}, err={}",
                     entityType, entityId, action, sourceDb, targetDb, ex.getMessage(), ex);
 
-            if (writeLog && entityType != SyncEntityType.SYNC_LOG) {
-                publishFailureLog(entityType, entityId, action, sourceDb, targetDb, ex.getMessage());
+            if (logMode != LogMode.NONE && allowWriteSyncLog(entityType)) {
+                SyncLogStatus st = SyncStatusDecider.decideOnException(ex);
+                publishLog(entityType, entityId, action, sourceDb, targetDb, st, ex.getMessage(), null);
             }
-            // 不往外抛异常，避免影响主业务
             return false;
         }
     }
 
-    private void publishSuccessLog(SyncEntityType entityType,
-                                   String entityId,
-                                   SyncAction action,
-                                   DatabaseType sourceDb,
-                                   DatabaseType targetDb) {
-        SyncLogEvent event = new SyncLogEvent(
-                entityType,
-                entityId,
-                action,
-                sourceDb,
-                targetDb,
-                true,
-                null
-        );
-        eventPublisher.publishEvent(event);
+    /** 过滤掉系统自用表，避免写日志时递归触发同步。 */
+    private boolean allowWriteSyncLog(SyncEntityType type) {
+        return type != SyncEntityType.SYNC_LOG
+                && type != SyncEntityType.SYNC_CONFLICT
+                && type != SyncEntityType.SYNC_CONFLICT_ITEM;
     }
 
-    private void publishFailureLog(SyncEntityType entityType,
-                                   String entityId,
-                                   SyncAction action,
-                                   DatabaseType sourceDb,
-                                   DatabaseType targetDb,
-                                   String errorMsg) {
-        SyncLogEvent event = new SyncLogEvent(
-                entityType,
-                entityId,
-                action,
-                sourceDb,
-                targetDb,
-                false,
-                errorMsg
-        );
-        eventPublisher.publishEvent(event);
+    private void publishLog(SyncEntityType entityType,
+                            String entityId,
+                            SyncAction action,
+                            DatabaseType sourceDb,
+                            DatabaseType targetDb,
+                            SyncLogStatus status,
+                            String message,
+                            String conflictId) {
+        eventPublisher.publishEvent(new SyncLogEvent(
+                entityType, entityId, action, sourceDb, targetDb, status, message, conflictId
+        ));
+    }
+
+    private DatabaseType useDb(DatabaseType db) {
+        return (db == null ? DatabaseType.MYSQL : db);
     }
 }
+
 
 
 

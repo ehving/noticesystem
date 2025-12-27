@@ -1,42 +1,47 @@
-import type { DatabaseType } from '@/types/enums/db'
+import type { DatabaseType } from '../enums/db'
+import type { SyncEntityType, SyncLogStatus } from '../enums/sync'
 
-export type SyncStatus = 'SUCCESS' | 'FAILED' | string
-export type SyncAction = string
-export type SyncEntityType = string
+export enum SyncAction {
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE'
+}
 
 export interface SyncLog {
   id: string
   entityType: SyncEntityType
-  entityId?: string
+  entityId: string
   action: SyncAction
-  sourceDb: DatabaseType | string
-  targetDb: DatabaseType | string
-  status: SyncStatus
-  retryCount?: number
-  errorMsg?: string
-  createTime?: string
-  updateTime?: string
+  sourceDb: DatabaseType
+  targetDb: DatabaseType
+  status: SyncLogStatus
+  errorMsg: string
+  retryCount: number
+  createTime: string
+  updateTime: string
 }
 
 export interface SyncLogVo {
-  pageNo: number
-  pageSize: number
+  pageNo?: number
+  pageSize?: number
   entityType?: SyncEntityType
   entityId?: string
   action?: SyncAction
-  sourceDb?: DatabaseType | 'ALL'
-  targetDb?: DatabaseType | 'ALL'
-  status?: SyncStatus
+  sourceDb?: DatabaseType
+  targetDb?: DatabaseType
+  status?: string
   beginTime?: string
   endTime?: string
 }
 
 export interface SyncLogDailyReportVo {
   statDate: string
-  sourceDb: string
-  targetDb: string
+  sourceDb: DatabaseType
+  targetDb: DatabaseType
   totalCount: number
   successCount: number
   failedCount: number
-  failedRate: number
+  conflictCount: number
+  errorCount: number
 }
+

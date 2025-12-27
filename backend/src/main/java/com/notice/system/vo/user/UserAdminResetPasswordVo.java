@@ -1,6 +1,6 @@
 package com.notice.system.vo.user;
 
-import com.notice.system.sync.DatabaseType;
+import com.notice.system.entityEnum.DatabaseType;
 import lombok.Data;
 
 /**

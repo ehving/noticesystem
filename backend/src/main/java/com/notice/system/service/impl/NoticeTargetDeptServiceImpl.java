@@ -6,12 +6,13 @@ import com.notice.system.entity.NoticeTargetDept;
 import com.notice.system.service.NoticeTargetDeptService;
 import com.notice.system.service.SyncService;
 import com.notice.system.service.base.MultiDbSyncServiceImpl;
-import com.notice.system.sync.DatabaseType;
-import com.notice.system.sync.SyncEntityType;
+import com.notice.system.entityEnum.DatabaseType;
+import com.notice.system.entityEnum.SyncEntityType;
 import com.notice.system.sync.SyncMetadataRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
@@ -37,26 +38,31 @@ public class NoticeTargetDeptServiceImpl
 
     @Override
     public List<NoticeTargetDept> listByNoticeIdFromDb(DatabaseType db, String noticeId) {
-        if (noticeId == null || noticeId.isBlank()) {
-            return Collections.emptyList();
-        }
+        if (isBlank(noticeId)) return Collections.emptyList();
 
-        SyncMetadataRegistry.EntitySyncDefinition<NoticeTargetDept> def =
-                metadataRegistry.getDefinition(SyncEntityType.NOTICE_TARGET_DEPT);
-        if (def == null) {
-            log.warn("[NOTICE_TARGET_DEPT] 未在 SyncMetadataRegistry 中找到定义");
-            return Collections.emptyList();
-        }
+        DatabaseType useDb = (db == null ? defaultDb() : db);
+        BaseMapper<NoticeTargetDept> mapper = resolveMapper(useDb);
 
-        BaseMapper<NoticeTargetDept> mapper = def.getMapper(db);
-        if (mapper == null) {
-            log.warn("[NOTICE_TARGET_DEPT] 未找到指定库的 Mapper，db={}", db);
-            return Collections.emptyList();
-        }
+        return mapper.selectList(new LambdaQueryWrapper<NoticeTargetDept>()
+                .eq(NoticeTargetDept::getNoticeId, noticeId));
+    }
 
-        LambdaQueryWrapper<NoticeTargetDept> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(NoticeTargetDept::getNoticeId, noticeId);
-        return mapper.selectList(wrapper);
+    @Override
+    public List<NoticeTargetDept> listByNoticeIdsFromDb(DatabaseType db, Collection<String> noticeIds) {
+        if (noticeIds == null || noticeIds.isEmpty()) return Collections.emptyList();
+
+        DatabaseType useDb = (db == null ? defaultDb() : db);
+        BaseMapper<NoticeTargetDept> mapper = resolveMapper(useDb);
+
+        // 去空 + 去重，避免 IN () 带空值或重复
+        List<String> ids = noticeIds.stream()
+                .filter(x -> x != null && !x.isBlank())
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) return Collections.emptyList();
+
+        return mapper.selectList(new LambdaQueryWrapper<NoticeTargetDept>()
+                .in(NoticeTargetDept::getNoticeId, ids));
     }
 
     @Override
@@ -64,42 +70,36 @@ public class NoticeTargetDeptServiceImpl
         removeByNoticeIdInDb(defaultDb(), noticeId);
     }
 
+    /**
+     * 删除某公告的全部范围关联：
+     * - 先查出关联记录
+     * - 再逐条走 removeByIdInDb（每条删除都会触发同步链路）
+     */
     @Override
     public void removeByNoticeIdInDb(DatabaseType db, String noticeId) {
-        if (noticeId == null || noticeId.isBlank()) {
-            return;
-        }
+        if (isBlank(noticeId)) return;
 
-        SyncMetadataRegistry.EntitySyncDefinition<NoticeTargetDept> def =
-                metadataRegistry.getDefinition(SyncEntityType.NOTICE_TARGET_DEPT);
-        if (def == null) {
-            log.warn("[NOTICE_TARGET_DEPT] 未在 SyncMetadataRegistry 中找到定义");
-            return;
-        }
+        DatabaseType useDb = (db == null ? defaultDb() : db);
+        BaseMapper<NoticeTargetDept> mapper = resolveMapper(useDb);
 
-        BaseMapper<NoticeTargetDept> mapper = def.getMapper(db);
-        if (mapper == null) {
-            log.warn("[NOTICE_TARGET_DEPT] 未找到指定库的 Mapper，db={}", db);
-            return;
-        }
-
-        LambdaQueryWrapper<NoticeTargetDept> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(NoticeTargetDept::getNoticeId, noticeId);
-        List<NoticeTargetDept> list = mapper.selectList(wrapper);
+        List<NoticeTargetDept> list = mapper.selectList(new LambdaQueryWrapper<NoticeTargetDept>()
+                .eq(NoticeTargetDept::getNoticeId, noticeId));
 
         if (list == null || list.isEmpty()) {
-            log.debug("[NOTICE_TARGET_DEPT] 无关联记录可删除，noticeId={}，db={}", noticeId, db);
+            log.debug("[NOTICE_TARGET_DEPT] nothing to remove, noticeId={}, db={}", noticeId, useDb);
             return;
         }
 
-        // 关键：对每条记录调用 removeByIdInDb，写操作走同步链路
         for (NoticeTargetDept ntd : list) {
-            this.removeByIdInDb(db, ntd.getId());
+            if (ntd == null || isBlank(ntd.getId())) continue;
+            removeByIdInDb(useDb, ntd.getId());
         }
 
-        log.info("[NOTICE_TARGET_DEPT] 已删除公告的所有部门关联，noticeId={}，db={}，count={}",
-                noticeId, db, list.size());
+        log.info("[NOTICE_TARGET_DEPT] removed scope relations, noticeId={}, db={}, count={}",
+                noticeId, useDb, list.size());
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
     }
 }
-
-

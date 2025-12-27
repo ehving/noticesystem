@@ -5,11 +5,10 @@ import com.notice.system.entity.Role;
 import com.notice.system.entity.User;
 import com.notice.system.vo.user.*;
 
-import java.time.LocalDateTime;
-
 public class UserConverter {
 
     private UserConverter() {}
+
     /* ========== 1. 注册相关 ========== */
 
     /**
@@ -22,11 +21,14 @@ public class UserConverter {
         User user = new User();
         user.setUsername(trim(vo.getUsername()));
         user.setPassword(rawPassword);   // 目前未加密，后续可以在外层先做 encode 再传进来
-        user.setRoleId(roleId);
-        user.setDeptId(vo.getDeptId());
-        user.setNickname(vo.getNickname());
-        user.setEmail(vo.getEmail());
-        user.setPhone(vo.getPhone());
+
+        user.setRoleId(trimOrNull(roleId));
+        user.setDeptId(trimOrNull(vo.getDeptId()));
+
+        user.setNickname(trimOrNull(vo.getNickname()));
+        user.setEmail(trimOrNull(vo.getEmail()));
+        user.setPhone(trimOrNull(vo.getPhone()));
+
         user.setStatus(1);               // 默认启用
         return user;
     }
@@ -63,15 +65,19 @@ public class UserConverter {
 
     /**
      * 将 UserUpdateProfileVo 中的变更应用到 User（当前登录用户修改个人资料）
+     * <p>
+     * 约定：
+     * - 前端传 "" / "   " 视为“清空字段”，落库为 null
      */
     public static void applyProfileUpdate(UserUpdateProfileVo vo, User user) {
         if (vo == null || user == null) {
             return;
         }
-        user.setNickname(vo.getNickname());
-        user.setEmail(vo.getEmail());
-        user.setPhone(vo.getPhone());
-        user.setAvatar(vo.getAvatar());
+        // 允许清空：把空串归一化为 null
+        user.setNickname(trimOrNull(vo.getNickname()));
+        user.setEmail(trimOrNull(vo.getEmail()));
+        user.setPhone(trimOrNull(vo.getPhone()));
+        user.setAvatar(trimOrNull(vo.getAvatar()));
     }
 
     /* ========== 3. 管理端创建 / 更新 / 列表 ========== */
@@ -85,14 +91,15 @@ public class UserConverter {
         }
         User user = new User();
         user.setUsername(trim(vo.getUsername()));
-        user.setPassword(rawPassword);             // 目前未加密，后续可外层统一加密
-        user.setNickname(vo.getNickname());
-        user.setEmail(vo.getEmail());
-        user.setPhone(vo.getPhone());
-        user.setAvatar(vo.getAvatar());
+        user.setPassword(rawPassword); // 目前未加密，后续可外层统一加密
 
-        user.setRoleId(vo.getRoleId());
-        user.setDeptId(vo.getDeptId());
+        user.setNickname(trimOrNull(vo.getNickname()));
+        user.setEmail(trimOrNull(vo.getEmail()));
+        user.setPhone(trimOrNull(vo.getPhone()));
+        user.setAvatar(trimOrNull(vo.getAvatar()));
+
+        user.setRoleId(trimOrNull(vo.getRoleId()));
+        user.setDeptId(trimOrNull(vo.getDeptId()));
 
         user.setStatus(vo.getStatus() == null ? 1 : vo.getStatus());
         return user;
@@ -100,6 +107,10 @@ public class UserConverter {
 
     /**
      * 管理端更新用户（包括角色 / 部门 / 状态）
+     * <p>
+     * 约定：
+     * - 字段为 null：表示“不修改”
+     * - 字段为 "" / "   "：表示“清空”，落库为 null
      */
     public static void applyAdminUpdate(UserAdminUpdateVo vo, User user) {
         if (vo == null || user == null) {
@@ -107,23 +118,23 @@ public class UserConverter {
         }
 
         if (vo.getNickname() != null) {
-            user.setNickname(vo.getNickname());
+            user.setNickname(trimOrNull(vo.getNickname()));
         }
         if (vo.getEmail() != null) {
-            user.setEmail(vo.getEmail());
+            user.setEmail(trimOrNull(vo.getEmail()));
         }
         if (vo.getPhone() != null) {
-            user.setPhone(vo.getPhone());
+            user.setPhone(trimOrNull(vo.getPhone()));
         }
         if (vo.getAvatar() != null) {
-            user.setAvatar(vo.getAvatar());
+            user.setAvatar(trimOrNull(vo.getAvatar()));
         }
 
         if (vo.getRoleId() != null) {
-            user.setRoleId(vo.getRoleId());
+            user.setRoleId(trimOrNull(vo.getRoleId()));
         }
         if (vo.getDeptId() != null) {
-            user.setDeptId(vo.getDeptId());
+            user.setDeptId(trimOrNull(vo.getDeptId()));
         }
         if (vo.getStatus() != null) {
             user.setStatus(vo.getStatus());
@@ -158,14 +169,19 @@ public class UserConverter {
 
     /* ================== 工具 ================== */
 
+    /**
+     * 统一规则：null -> null；"   " -> null；"abc " -> "abc"
+     */
     private static String trimOrNull(String s) {
         if (s == null) return null;
         String t = s.trim();
         return t.isEmpty() ? null : t;
     }
 
+    /**
+     * 仅 trim，不做空串转 null（用于 username 这种必填字段）
+     */
     private static String trim(String s) {
         return (s == null ? null : s.trim());
     }
 }
-

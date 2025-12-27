@@ -1,3 +1,5 @@
+import type {DatabaseType} from "@/types/enums/db.ts";
+
 export interface UserAdminListVo {
   id: string
   username: string
@@ -32,7 +34,7 @@ export interface UserAdminCreateVo {
   roleId?: string
   deptId?: string
   status?: number
-  sourceDb?: string
+  sourceDb?: DatabaseType
 }
 
 export interface UserAdminUpdateVo {
@@ -43,10 +45,10 @@ export interface UserAdminUpdateVo {
   roleId?: string
   deptId?: string
   status?: number
-  sourceDb?: string
+  sourceDb?: DatabaseType
 }
 
 export interface UserAdminResetPasswordVo {
   newPassword: string
-  sourceDb?: string
+  sourceDb?: DatabaseType
 }

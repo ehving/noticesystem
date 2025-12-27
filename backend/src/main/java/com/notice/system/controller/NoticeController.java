@@ -1,6 +1,5 @@
 package com.notice.system.controller;
 
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.notice.system.common.Result;
 import com.notice.system.entity.Notice;
@@ -16,12 +15,12 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDateTime;
 
 /**
- * 公告用户侧接口：
- *  - 分页查询已发布公告
- *  - 查看公告详情（登录用户自动标记已读）
- *
+ * 公告接口（用户端）
+ * 路径前缀：/api/notices
  * 说明：
- *  - 不提供选库参数，统一走默认数据源（例如 MYSQL）
+ *  - 不提供选库参数，统一使用默认库
+ *  - /page 匿名可访问
+ *  - /{id} 匿名可访问；若已登录则自动记录已读
  */
 @Slf4j
 @RestController
@@ -34,12 +33,12 @@ public class NoticeController {
     private final AuthService authService;
 
     /**
-     * 分页查询已发布公告（匿名可访问）
+     * 分页查询已发布且在有效期内的公告（匿名可访问）
      *
      * @param pageNo   页码，默认 1
      * @param pageSize 每页大小，默认 10
-     * @param keyword  标题/内容模糊搜索（可空）
-     * @param level    公告等级（NORMAL/IMPORTANT/URGENT，可空）
+     * @param keyword  标题/内容关键字（可空）
+     * @param level    公告等级 NORMAL/IMPORTANT/URGENT（可空）
      */
     @GetMapping("/page")
     public Result<Page<Notice>> pageNotices(
@@ -48,51 +47,65 @@ public class NoticeController {
             @RequestParam(name = "keyword", required = false) String keyword,
             @RequestParam(name = "level", required = false) String level
     ) {
-        Page<Notice> page = noticeService.pagePublishedForUser(pageNo, pageSize, keyword, level);
-        return Result.success(page);
+        return Result.success(noticeService.pagePublishedForUser(pageNo, pageSize, keyword, level));
     }
 
-
     /**
-     * 公告详情：
-     *  - 匿名用户：仅返回详情，不记录已读
-     *  - 登录用户：返回详情并自动记录已读
+     * 公告详情（匿名可访问）
+     * 规则：
+     *  - 仅允许查看已发布且在有效期内的公告
+     *  - 若用户已登录：自动记录已读（deviceType 固定为 "PC"）
      */
     @GetMapping("/{id}")
     public Result<Notice> getNoticeDetail(@PathVariable("id") String id) {
-
         Notice notice = noticeService.getById(id);
         if (notice == null) {
             return Result.fail("公告不存在");
         }
 
-        // 只允许查看已发布且在有效期内的公告
-        if (!"PUBLISHED".equalsIgnoreCase(notice.getStatus())) {
-            return Result.fail("公告未发布或已被撤回");
+        String invalidMsg = validateReadable(notice);
+        if (invalidMsg != null) {
+            return Result.fail(invalidMsg);
         }
 
-        LocalDateTime now = LocalDateTime.now();
-        if (notice.getPublishTime() != null && notice.getPublishTime().isAfter(now)) {
-            return Result.fail("公告尚未生效");
-        }
-        if (notice.getExpireTime() != null && notice.getExpireTime().isBefore(now)) {
-            return Result.fail("公告已过期");
-        }
-
-        // 如果是登录用户，则记录已读（使用默认源库）
+        // 登录用户：记录已读；未登录：忽略
         try {
             User user = authService.requireLoginUser();
-            // 数据库触发器自动记录阅读
             noticeReadService.markAsRead(id, user.getId(), "PC");
-
         } catch (UnauthenticatedException e) {
-            // 未登录则忽略已读记录
             log.debug("未登录用户访问公告详情，不记录已读：noticeId={}", id);
         }
 
         return Result.success(notice);
     }
+
+    /**
+     * 校验公告是否允许用户查看：
+     *  - 必须 PUBLISHED
+     *  - publishTime <= now
+     *  - expireTime == null 或 expireTime > now
+     *
+     * @return null 表示可读；非 null 表示错误信息
+     */
+    private String validateReadable(Notice notice) {
+        if (!"PUBLISHED".equalsIgnoreCase(notice.getStatus())) {
+            return "公告未发布或已被撤回";
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+
+        if (notice.getPublishTime() != null && notice.getPublishTime().isAfter(now)) {
+            return "公告尚未生效";
+        }
+
+        if (notice.getExpireTime() != null && notice.getExpireTime().isBefore(now)) {
+            return "公告已过期";
+        }
+
+        return null;
+    }
 }
+
 
 
 

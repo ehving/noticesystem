@@ -1,7 +1,16 @@
-export type DatabaseType = 'MYSQL' | 'PG' | 'SQLSERVER'
+export enum DatabaseType {
+  MYSQL = 'MYSQL',
+  PG = 'PG',
+  SQLSERVER = 'SQLSERVER'
+}
 
-export const DB_OPTIONS: { label: string; value: DatabaseType }[] = [
-  { label: 'MySQL', value: 'MYSQL' },
-  { label: 'PostgreSQL', value: 'PG' },
-  { label: 'SQL Server', value: 'SQLSERVER' },
-]
+export const DatabaseTypeMap: Record<DatabaseType, string> = {
+  [DatabaseType.MYSQL]: 'MySQL',
+  [DatabaseType.PG]: 'PostgreSQL',
+  [DatabaseType.SQLSERVER]: 'SQL Server'
+}
+
+export const DB_OPTIONS = Object.values(DatabaseType).map((db) => ({
+  value: db,
+  label: DatabaseTypeMap[db]
+}))

@@ -1,25 +1,17 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { useAdminStore } from '@/stores/admin'
 import {
   pageSyncLogs,
   getSyncLogDetail,
-  retrySyncLog,
   cleanSyncLogs,
   listActions,
   listEntityTypes,
   listStatuses,
-  dailyReport,
 } from '@/api/modules/admin/sync-logs'
-import type {
-  SyncLog,
-  SyncLogVo,
-  SyncAction,
-  SyncEntityType,
-  SyncStatus,
-  SyncLogDailyReportVo,
-} from '@/types/models/sync-log'
+import type { SyncLog, SyncLogVo, SyncAction } from '@/types/models/sync-log'
+import { SyncLogStatus, SyncEntityType } from '@/types/enums/sync'
 import type { MpPage } from '@/types/page'
 import type { DatabaseType } from '@/types/enums/db'
 import { DB_OPTIONS } from '@/types/enums/db'
@@ -27,13 +19,16 @@ import { formatDateTime } from '@/utils/time'
 import PageHeader from '@/components/common/PageHeader.vue'
 import TableToolbar from '@/components/common/TableToolbar.vue'
 import { useLoading } from '@/hooks/useLoading'
+import { useConfirm } from '@/hooks/useConfirm'
+import { success } from '@/utils/message'
+import { Search, RefreshLeft, Delete, View, Warning, Filter, DataLine, Calendar } from '@element-plus/icons-vue'
 
 const adminStore = useAdminStore()
+const router = useRouter()
 const { loading, run } = useLoading()
+const { confirm } = useConfirm()
 
-const activeTab = ref('list')
-
-const statuses = ref<SyncStatus[]>([])
+const statuses = ref<SyncLogStatus[]>([])
 const actions = ref<SyncAction[]>([])
 const entityTypes = ref<SyncEntityType[]>([])
 
@@ -43,6 +38,12 @@ const pagination = reactive({
   pageSize: 10,
   total: 0,
 })
+
+/**
+ * 关键：query 里 beginTime/endTime 在你的 VO 是 LocalDateTime
+ * 前端用 string 承载（按你接口约定传 YYYY-MM-DD HH:mm 或 YYYY-MM-DD）。
+ * 这里保持 string，但传参时统一转 undefined。
+ */
 const query = reactive<SyncLogVo>({
   pageNo: 1,
   pageSize: 10,
@@ -52,26 +53,24 @@ const query = reactive<SyncLogVo>({
   sourceDb: undefined,
   targetDb: undefined,
   status: undefined,
-  beginTime: '',
-  endTime: '',
+  beginTime: '' as any,
+  endTime: '' as any,
 })
 
 const detailVisible = ref(false)
 const detail = ref<SyncLog | null>(null)
-const repairDialogVisible = ref(false)
-const repairDb = ref<string>('')
-const currentRow = ref<SyncLog | null>(null)
 
+const cleanDialogVisible = ref(false)
 const cleanParams = reactive({
   db: 'ALL' as DatabaseType | 'ALL',
   retainDays: undefined as number | undefined,
   maxCount: undefined as number | undefined,
 })
 
-const reportLoading = ref(false)
-const reportData = ref<SyncLogDailyReportVo[]>([])
-
-const formatTime = (val?: string) => formatDateTime(val)
+const normalizeDb = (db?: any) => {
+  if (!db || db === 'ALL') return undefined
+  return db
+}
 
 const fetchList = () =>
   run(async () => {
@@ -80,13 +79,15 @@ const fetchList = () =>
       pageNo: pagination.pageNo,
       pageSize: pagination.pageSize,
       entityId: query.entityId || undefined,
-      beginTime: query.beginTime || undefined,
-      endTime: query.endTime || undefined,
+      beginTime: (query as any).beginTime || undefined,
+      endTime: (query as any).endTime || undefined,
+      sourceDb: normalizeDb(query.sourceDb),
+      targetDb: normalizeDb(query.targetDb),
     })
     tableData.value = res.records || []
     pagination.total = res.total || 0
-    pagination.pageNo = res.current || pagination.pageNo
-    pagination.pageSize = res.size || pagination.pageSize
+    pagination.pageNo = (res.current as any) || pagination.pageNo
+    pagination.pageSize = (res.size as any) || pagination.pageSize
   })
 
 const onSearch = () => {
@@ -101,8 +102,8 @@ const resetQuery = () => {
   query.sourceDb = undefined
   query.targetDb = undefined
   query.status = undefined
-  query.beginTime = ''
-  query.endTime = ''
+  ;(query as any).beginTime = ''
+  ;(query as any).endTime = ''
   pagination.pageNo = 1
   fetchList()
 }
@@ -123,54 +124,27 @@ const openDetail = async (row: SyncLog) => {
   detailVisible.value = true
 }
 
-const openRepair = (row: SyncLog) => {
-  currentRow.value = row
-  repairDb.value = row.sourceDb || adminStore.activeDb
-  repairDialogVisible.value = true
+const goConflicts = () => {
+  router.push('/admin/conflicts')
 }
 
-const onRetry = async () => {
-  if (!currentRow.value) return
-  const ok = await ElMessageBox.confirm(
-    `将以【${repairDb.value}】作为来源库进行修复（实际调用重试接口）。是否继续？`,
-    '提示',
-    { type: 'warning' }
-  ).then(
-    () => true,
-    () => false
-  )
-  if (!ok) return
-  await retrySyncLog(currentRow.value.id)
-  repairDialogVisible.value = false
-  fetchList()
+const openCleanDialog = () => {
+  cleanDialogVisible.value = true
 }
 
-const onClean = async () => {
-  await cleanSyncLogs(cleanParams.db, cleanParams.retainDays, cleanParams.maxCount)
-  fetchList()
+const confirmClean = async () => {
+  await run(async () => {
+    const msg = await cleanSyncLogs(cleanParams.db, cleanParams.retainDays, cleanParams.maxCount)
+    success(msg || '清理完成')
+    cleanDialogVisible.value = false
+    fetchList()
+  })
 }
 
 const fetchEnums = async () => {
-  statuses.value = await listStatuses()
-  actions.value = await listActions()
-  entityTypes.value = await listEntityTypes()
-}
-
-const fetchReport = async () => {
-  reportLoading.value = true
-  try {
-    const res = await dailyReport({
-      ...query,
-      pageNo: pagination.pageNo,
-      pageSize: pagination.pageSize,
-      entityId: query.entityId || undefined,
-      beginTime: query.beginTime || undefined,
-      endTime: query.endTime || undefined,
-    })
-    reportData.value = res
-  } finally {
-    reportLoading.value = false
-  }
+  statuses.value = (await listStatuses()) || []
+  actions.value = (await listActions()) || []
+  entityTypes.value = (await listEntityTypes()) || []
 }
 
 onMounted(async () => {
@@ -178,175 +152,145 @@ onMounted(async () => {
   fetchList()
 })
 
-watch(
-  () => adminStore.changeTick,
-  () => {
-    if (activeTab.value === 'list') fetchList()
-    else fetchReport()
+watch(() => adminStore.changeTick, () => {
+  fetchList()
+})
+
+const getStatusTagType = (status: SyncLogStatus) => {
+  switch (status) {
+    case SyncLogStatus.SUCCESS:
+      return 'success'
+    case SyncLogStatus.FAILED:
+      return 'danger'
+    case SyncLogStatus.CONFLICT:
+      return 'warning'
+    case SyncLogStatus.ERROR:
+      return 'danger'
+    default:
+      return 'info'
   }
-)
+}
+
+const formatJson = (str?: string) => {
+  if (!str) return '-'
+  try {
+    const obj = JSON.parse(str)
+    return JSON.stringify(obj, null, 2)
+  } catch (e) {
+    return str
+  }
+}
 </script>
 
 <template>
   <div class="page">
     <el-card>
-      <PageHeader title="同步日志" :sub-title="`当前库：${adminStore.activeDb}`" />
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="日志列表" name="list">
-          <TableToolbar>
-            <template #filters>
-              <el-select v-model="query.entityType" clearable placeholder="实体类型" style="width: 150px" @change="onSearch">
-                <el-option v-for="t in entityTypes" :key="t" :label="t" :value="t" />
-              </el-select>
-              <el-input v-model="query.entityId" placeholder="实体ID" clearable style="width: 180px" @keyup.enter.native="onSearch" />
-              <el-select v-model="query.action" clearable placeholder="操作" style="width: 140px" @change="onSearch">
-                <el-option v-for="a in actions" :key="a" :label="a" :value="a" />
-              </el-select>
-              <el-select v-model="query.status" clearable placeholder="状态" style="width: 140px" @change="onSearch">
-                <el-option v-for="s in statuses" :key="s" :label="s" :value="s" />
-              </el-select>
-              <el-select v-model="query.sourceDb" clearable placeholder="源库" style="width: 140px" @change="onSearch">
-                <el-option label="ALL" value="ALL" />
-                <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
-              </el-select>
-              <el-select v-model="query.targetDb" clearable placeholder="目标库" style="width: 140px" @change="onSearch">
-                <el-option label="ALL" value="ALL" />
-                <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
-              </el-select>
+      <PageHeader title="同步日志" :sub-title="`当前库：${adminStore.activeDb}`">
+        <el-button type="danger" plain :icon="Delete" @click="openCleanDialog">清理日志</el-button>
+        <el-button :icon="RefreshLeft" @click="fetchList" :loading="loading">刷新</el-button>
+      </PageHeader>
+
+      <TableToolbar>
+        <template #filters>
+          <el-select v-model="query.entityType" clearable placeholder="实体类型" style="width: 140px" @change="onSearch">
+            <template #prefix><el-icon><DataLine /></el-icon></template>
+            <el-option v-for="t in entityTypes" :key="t" :label="t" :value="t" />
+          </el-select>
+
+          <el-select v-model="query.action" clearable placeholder="操作类型" style="width: 120px" @change="onSearch">
+            <template #prefix><el-icon><Filter /></el-icon></template>
+            <el-option v-for="a in actions" :key="a" :label="a" :value="a" />
+          </el-select>
+
+          <el-select v-model="query.status" clearable placeholder="执行状态" style="width: 120px" @change="onSearch">
+            <template #prefix><el-icon><Warning /></el-icon></template>
+            <el-option v-for="s in statuses" :key="s" :label="s" :value="s" />
+          </el-select>
+
+          <el-select v-model="query.sourceDb" clearable placeholder="源库" style="width: 110px" @change="onSearch">
+            <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
+          </el-select>
+
+          <el-select v-model="query.targetDb" clearable placeholder="目标库" style="width: 110px" @change="onSearch">
+            <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
+          </el-select>
+
+          <div class="date-range">
             <el-date-picker
-              v-model="query.beginTime"
+              v-model="(query as any).beginTime"
               type="datetime"
               placeholder="开始时间"
               format="YYYY-MM-DD HH:mm"
               value-format="YYYY-MM-DD HH:mm"
+              style="width: 190px"
+              :prefix-icon="Calendar"
             />
+            <span class="date-separator">-</span>
             <el-date-picker
-              v-model="query.endTime"
+              v-model="(query as any).endTime"
               type="datetime"
               placeholder="结束时间"
               format="YYYY-MM-DD HH:mm"
               value-format="YYYY-MM-DD HH:mm"
-            />
-            </template>
-            <template #actions>
-              <el-button type="primary" @click="onSearch">查询</el-button>
-              <el-button @click="resetQuery">重置</el-button>
-            </template>
-          </TableToolbar>
-
-          <div class="clean">
-            <div class="label">清理日志：</div>
-            <el-select v-model="cleanParams.db" placeholder="选择库" style="width: 140px">
-              <el-option label="全部" value="ALL" />
-              <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
-            </el-select>
-            <el-input-number v-model="cleanParams.retainDays" :min="0" placeholder="保留天数" />
-            <el-input-number v-model="cleanParams.maxCount" :min="0" placeholder="最大条数" />
-            <el-button type="warning" @click="onClean">执行清理</el-button>
-          </div>
-
-          <el-table :data="tableData" v-loading="loading" style="width: 100%">
-            <el-table-column prop="createTime" label="时间" width="180">
-              <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
-            </el-table-column>
-            <el-table-column prop="entityType" label="实体类型" width="140" />
-            <el-table-column prop="entityId" label="实体ID" min-width="160" />
-            <el-table-column prop="action" label="操作" width="120" />
-            <el-table-column prop="sourceDb" label="源库" width="120" />
-            <el-table-column prop="targetDb" label="目标库" width="120" />
-            <el-table-column label="状态" width="140">
-              <template #default="{ row }">
-                <el-tag :type="row.status === 'SUCCESS' ? 'success' : 'danger'" size="small">
-                  {{ row.status }}
-                </el-tag>
-                <span v-if="row.retryCount !== undefined" class="retry">({{ row.retryCount }}次重试)</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="errorMsg" label="错误" min-width="200" show-overflow-tooltip />
-            <el-table-column label="操作" width="180" fixed="right">
-              <template #default="{ row }">
-                <el-button type="primary" link size="small" @click="openDetail(row)">详情</el-button>
-                <el-button v-if="row.status === 'FAILED'" type="warning" link size="small" @click="openRepair(row)">
-                  选择来源库修复
-                </el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-if="!loading && tableData.length === 0" description="暂无数据" />
-
-          <div class="pagination">
-            <el-pagination
-              background
-              layout="total, sizes, prev, pager, next, jumper"
-              :total="pagination.total"
-              :page-size="pagination.pageSize"
-              :current-page="pagination.pageNo"
-              :page-sizes="[10, 20, 50]"
-              @size-change="handleSizeChange"
-              @current-change="handleCurrentChange"
+              style="width: 190px"
+              :prefix-icon="Calendar"
             />
           </div>
-        </el-tab-pane>
 
-        <el-tab-pane label="日报统计" name="report">
-          <TableToolbar>
-            <template #filters>
-              <el-select v-model="query.entityType" clearable placeholder="实体类型" style="width: 150px">
-                <el-option v-for="t in entityTypes" :key="t" :label="t" :value="t" />
-              </el-select>
-              <el-select v-model="query.action" clearable placeholder="操作" style="width: 140px">
-                <el-option v-for="a in actions" :key="a" :label="a" :value="a" />
-              </el-select>
-              <el-select v-model="query.status" clearable placeholder="状态" style="width: 140px">
-                <el-option v-for="s in statuses" :key="s" :label="s" :value="s" />
-              </el-select>
-              <el-select v-model="query.sourceDb" clearable placeholder="源库" style="width: 140px">
-                <el-option label="ALL" value="ALL" />
-                <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
-              </el-select>
-              <el-select v-model="query.targetDb" clearable placeholder="目标库" style="width: 140px">
-                <el-option label="ALL" value="ALL" />
-                <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
-              </el-select>
-            <el-date-picker
-              v-model="query.beginTime"
-              type="date"
-              placeholder="开始日期"
-              format="YYYY-MM-DD"
-              value-format="YYYY-MM-DD"
-            />
-            <el-date-picker
-              v-model="query.endTime"
-              type="date"
-              placeholder="结束日期"
-              format="YYYY-MM-DD"
-              value-format="YYYY-MM-DD"
-            />
-            </template>
-            <template #actions>
-              <el-button type="primary" @click="fetchReport">查询</el-button>
-            </template>
-          </TableToolbar>
+          <el-input v-model="query.entityId" placeholder="搜索实体ID..." clearable style="width: 200px" :prefix-icon="Search" @keyup.enter="onSearch" />
+        </template>
 
-          <el-table :data="reportData" v-loading="reportLoading" style="width: 100%">
-            <el-table-column prop="statDate" label="日期" width="140" />
-            <el-table-column prop="sourceDb" label="源库" width="120" />
-            <el-table-column prop="targetDb" label="目标库" width="120" />
-            <el-table-column prop="totalCount" label="总数" width="100" />
-            <el-table-column prop="successCount" label="成功" width="100" />
-            <el-table-column prop="failedCount" label="失败" width="100" />
-            <el-table-column label="失败率" width="120">
-              <template #default="{ row }">
-                {{ row.failedRate != null ? (row.failedRate * 100).toFixed(2) + '%' : '-' }}
-              </template>
-            </el-table-column>
-          </el-table>
-          <el-empty v-if="!reportLoading && reportData.length === 0" description="暂无数据" />
-        </el-tab-pane>
-      </el-tabs>
+        <template #actions>
+          <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
+          <el-button :icon="RefreshLeft" @click="resetQuery">重置</el-button>
+        </template>
+      </TableToolbar>
+
+      <el-table :data="tableData" v-loading="loading" style="width: 100%" border>
+        <el-table-column label="状态" width="160">
+          <template #default="{ row }">
+            <el-tag :type="getStatusTagType(row.status)" size="small" effect="light" round>
+              {{ row.status }}
+            </el-tag>
+            <span v-if="row.retryCount != null" class="retry">({{ row.retryCount }}次重试)</span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="entityType" label="实体类型" width="140">
+          <template #default="{ row }"><el-tag size="small" type="info">{{ row.entityType }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="action" label="操作" width="100" />
+        <el-table-column prop="sourceDb" label="源库" width="100" />
+        <el-table-column prop="targetDb" label="目标库" width="100" />
+        <el-table-column prop="entityId" label="实体ID" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="errorMsg" label="错误" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="createTime" label="时间" width="170">
+          <template #default="{ row }">{{ formatDateTime(row.createTime) }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="180" fixed="right">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" :icon="View" @click="openDetail(row)">详情</el-button>
+            <el-button v-if="row.status === SyncLogStatus.CONFLICT" type="danger" link size="small" :icon="Warning" @click="goConflicts">
+              查看冲突
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div class="pagination">
+        <el-pagination
+          background
+          layout="total, sizes, prev, pager, next, jumper"
+          :total="pagination.total"
+          :page-size="pagination.pageSize"
+          :current-page="pagination.pageNo"
+          :page-sizes="[10, 20, 50]"
+          @size-change="handleSizeChange"
+          @current-change="handleCurrentChange"
+        />
+      </div>
     </el-card>
 
-    <el-drawer v-model="detailVisible" title="日志详情" size="40%">
+    <el-drawer v-model="detailVisible" title="日志详情" size="50%">
       <el-descriptions v-if="detail" :column="1" border>
         <el-descriptions-item label="ID">{{ detail.id }}</el-descriptions-item>
         <el-descriptions-item label="实体类型">{{ detail.entityType }}</el-descriptions-item>
@@ -356,30 +300,33 @@ watch(
         <el-descriptions-item label="目标库">{{ detail.targetDb }}</el-descriptions-item>
         <el-descriptions-item label="状态">{{ detail.status }}</el-descriptions-item>
         <el-descriptions-item label="重试次数">{{ detail.retryCount }}</el-descriptions-item>
-        <el-descriptions-item label="错误信息">{{ detail.errorMsg }}</el-descriptions-item>
-        <el-descriptions-item label="创建时间">{{ formatTime(detail.createTime) }}</el-descriptions-item>
-        <el-descriptions-item label="更新时间">{{ formatTime(detail.updateTime) }}</el-descriptions-item>
+        <el-descriptions-item label="错误信息">
+          <pre class="json-content">{{ formatJson(detail.errorMsg) }}</pre>
+        </el-descriptions-item>
+        <el-descriptions-item label="创建时间">{{ formatDateTime(detail.createTime) }}</el-descriptions-item>
+        <el-descriptions-item label="更新时间">{{ formatDateTime(detail.updateTime) }}</el-descriptions-item>
       </el-descriptions>
     </el-drawer>
 
-    <el-dialog v-model="repairDialogVisible" title="选择来源库修复" width="420px" destroy-on-close>
-      <div v-if="currentRow">
-        <p>实体：{{ currentRow.entityType }} #{{ currentRow.entityId }}</p>
-        <p>操作：{{ currentRow.action }}</p>
-        <p>源->目标：{{ currentRow.sourceDb }} -> {{ currentRow.targetDb }}</p>
-        <p>错误：{{ currentRow.errorMsg || '-' }}</p>
-        <p class="tip">提示：前端选择来源库用于演示，后端实际以日志/接口策略为准。</p>
-      </div>
-      <el-form label-width="120px">
-        <el-form-item label="修复来源库">
-          <el-select v-model="repairDb" placeholder="请选择">
+    <!-- 清理日志弹窗 -->
+    <el-dialog v-model="cleanDialogVisible" title="清理日志" width="420px">
+      <el-form label-width="100px">
+        <el-form-item label="目标数据库">
+          <el-select v-model="cleanParams.db" placeholder="选择库" style="width: 100%">
+            <el-option label="全部数据库" value="ALL" />
             <el-option v-for="db in DB_OPTIONS" :key="db.value" :label="db.label" :value="db.value" />
           </el-select>
         </el-form-item>
+        <el-form-item label="保留天数">
+          <el-input-number v-model="cleanParams.retainDays" :min="0" placeholder="例如：30" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="最大条数">
+          <el-input-number v-model="cleanParams.maxCount" :min="0" :step="1000" placeholder="例如：10000" style="width: 100%" />
+        </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="repairDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="onRetry">确认修复</el-button>
+        <el-button @click="cleanDialogVisible = false">取消</el-button>
+        <el-button type="danger" @click="confirmClean" :loading="loading">确认清理</el-button>
       </template>
     </el-dialog>
   </div>
@@ -392,38 +339,14 @@ watch(
   gap: 12px;
 }
 
-.toolbar {
+.date-range {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
 }
 
-.title {
-  font-weight: 600;
-}
-
-.sub {
+.date-separator {
   color: #909399;
-  font-size: 12px;
-}
-
-.filters {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  margin: 12px 0;
-}
-
-.clean {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin: 8px 0;
-}
-
-.label {
-  color: #606266;
 }
 
 .pagination {
@@ -435,5 +358,20 @@ watch(
 .retry {
   margin-left: 4px;
   color: #909399;
+}
+
+.json-content {
+  margin: 0;
+  font-family: v-mono, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background-color: #fafafa;
+  padding: 10px;
+  border-radius: 4px;
+  border: 1px solid #eaeaea;
+  max-height: 400px;
+  overflow-y: auto;
 }
 </style>

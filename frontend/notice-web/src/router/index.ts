@@ -10,6 +10,10 @@ import MobileNotSupported from '@/views/common/MobileNotSupported.vue'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    {
+      path: '/',
+      redirect: '/notices',
+    },
     ...publicRoutes,
     ...userRoutes,
     ...adminRoutes,

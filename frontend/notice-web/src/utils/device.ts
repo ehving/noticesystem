@@ -1,7 +1,3 @@
-export const isMobileViewport = (): boolean => typeof window !== 'undefined' && window.innerWidth < 768
-
-export const isDesktopViewport = (): boolean => typeof window !== 'undefined' && window.innerWidth >= 1024
-
 export const isMobileByWidth = (): boolean => typeof window !== 'undefined' && window.innerWidth < 1024
 
 export const getDeviceType = (): 'mobile' | 'desktop' => (isMobileByWidth() ? 'mobile' : 'desktop')

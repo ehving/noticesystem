@@ -1,7 +1,7 @@
 package com.notice.system.service.base;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.notice.system.sync.DatabaseType;
+import com.notice.system.entityEnum.DatabaseType;
 
 import java.io.Serializable;
 import java.util.Collection;

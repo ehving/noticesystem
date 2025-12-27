@@ -1,12 +1,9 @@
 package com.notice.system.sync;
 
-import lombok.extern.slf4j.Slf4j;
+import com.notice.system.entityEnum.DatabaseType;
 import org.springframework.stereotype.Component;
 
-/**
- * 目标库为 MySQL 的同步执行器
- */
-@Slf4j
+/** 目标库为 MySQL 的同步执行器。 */
 @Component
 public class MysqlSyncExecutor extends AbstractSyncExecutor {
 
@@ -14,4 +11,5 @@ public class MysqlSyncExecutor extends AbstractSyncExecutor {
         super(DatabaseType.MYSQL, "[MYSQL]", metadataRegistry);
     }
 }
+
 

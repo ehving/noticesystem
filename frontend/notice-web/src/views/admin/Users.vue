@@ -13,6 +13,13 @@ import { formatDateTime } from '@/utils/time'
 import PageHeader from '@/components/common/PageHeader.vue'
 import TableToolbar from '@/components/common/TableToolbar.vue'
 import { useLoading } from '@/hooks/useLoading'
+import { success } from '@/utils/message'
+import {
+  Search, RefreshLeft, Plus, Edit, Delete, Key,
+  User, Message, Iphone, OfficeBuilding, CircleCheck, Postcard, Lock
+} from '@element-plus/icons-vue'
+
+type RuleItem = { required: boolean; message: string; trigger: 'blur' | 'change' }
 
 const adminStore = useAdminStore()
 const { loading, run } = useLoading()
@@ -49,9 +56,14 @@ const form = reactive({
   deptId: '',
   status: 1,
 })
-const rules = {
+const rules = ref<Record<string, RuleItem[]>>({
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+  roleId: [{ required: true, message: '请选择角色', trigger: 'change' }],
+  status: [{ required: true, message: '请选择状态', trigger: 'change' }],
+})
+
+const setPasswordRule = (required: boolean) => {
+  rules.value.password = required ? [{ required: true, message: '请输入密码', trigger: 'blur' }] : []
 }
 
 const resetDialog = () => {
@@ -68,6 +80,7 @@ const resetDialog = () => {
     deptId: '',
     status: 1,
   })
+  setPasswordRule(true)
 }
 
 const fetchRolesAndDepts = async () => {
@@ -135,6 +148,7 @@ const openEdit = (row: UserAdminListVo) => {
     deptId: row.deptId,
     status: row.status ?? 1,
   })
+  setPasswordRule(false)
   dialogVisible.value = true
 }
 
@@ -152,6 +166,7 @@ const onSave = async () => {
         deptId: form.deptId || undefined,
         status: form.status,
       })
+      success('保存成功')
     } else {
       await createUser({
         username: form.username,
@@ -164,6 +179,7 @@ const onSave = async () => {
         deptId: form.deptId || undefined,
         status: form.status,
       })
+      success('创建成功')
     }
     dialogVisible.value = false
     fetchList()
@@ -171,8 +187,13 @@ const onSave = async () => {
 }
 
 const onDelete = async (row: UserAdminListVo) => {
-  await ElMessageBox.confirm(`确定删除用户【${row.username}】吗？`, '提示', { type: 'warning' })
+  await ElMessageBox.confirm(`确定删除用户【${row.username}】吗？`, '提示', {
+    type: 'warning',
+    confirmButtonText: '确认',
+    cancelButtonText: '取消',
+  })
   await deleteUser(row.id)
+  success('删除成功')
   fetchList()
 }
 
@@ -182,7 +203,7 @@ const resetPwdForm = reactive({
   id: '',
   newPassword: '',
 })
-const resetPwdRules = {
+const resetPwdRules: Record<string, RuleItem[]> = {
   newPassword: [{ required: true, message: '请输入新密码', trigger: 'blur' }],
 }
 
@@ -197,6 +218,7 @@ const onResetPwd = async () => {
   await resetPwdRef.value.validate(async (valid: boolean) => {
     if (!valid) return
     await resetPassword(resetPwdForm.id, { newPassword: resetPwdForm.newPassword })
+    success('已重置密码')
     resetPwdDialogVisible.value = false
   })
 }
@@ -220,60 +242,80 @@ watch(
   <div class="page">
     <el-card>
       <PageHeader title="用户管理" :sub-title="`当前库：${adminStore.activeDb}`">
-        <el-button type="primary" @click="openCreate">新增用户</el-button>
-        <el-button @click="fetchList" :loading="loading">刷新</el-button>
+        <el-button type="primary" :icon="Plus" @click="openCreate">新增用户</el-button>
+        <el-button :icon="RefreshLeft" @click="fetchList" :loading="loading">刷新</el-button>
       </PageHeader>
 
       <TableToolbar>
         <template #filters>
           <el-input
             v-model="query.keyword"
-            placeholder="用户名/昵称/邮箱"
+            placeholder="搜索用户名/昵称/邮箱"
             clearable
             style="width: 220px"
+            :prefix-icon="Search"
             @keyup.enter.native="onSearch"
           />
           <el-select v-model="query.roleId" placeholder="角色" clearable style="width: 160px" @change="onSearch">
+            <template #prefix><el-icon><User /></el-icon></template>
             <el-option v-for="r in roleOptions" :key="r.id" :label="r.name" :value="r.id" />
           </el-select>
           <el-select v-model="query.deptId" placeholder="部门" clearable style="width: 180px" @change="onSearch">
+            <template #prefix><el-icon><OfficeBuilding /></el-icon></template>
             <el-option v-for="d in deptOptions" :key="d.id" :label="d.name" :value="d.id" />
           </el-select>
           <el-select v-model="query.status" placeholder="状态" clearable style="width: 140px" @change="onSearch">
+            <template #prefix><el-icon><CircleCheck /></el-icon></template>
             <el-option label="启用" :value="1" />
             <el-option label="禁用" :value="0" />
           </el-select>
         </template>
         <template #actions>
-          <el-button type="primary" @click="onSearch">查询</el-button>
-          <el-button @click="resetQuery">重置</el-button>
+          <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
+          <el-button :icon="RefreshLeft" @click="resetQuery">重置</el-button>
         </template>
       </TableToolbar>
 
-      <el-table :data="tableData" v-loading="loading" style="width: 100%">
-        <el-table-column prop="username" label="用户名" min-width="140" />
-        <el-table-column prop="nickname" label="昵称" min-width="120" />
-        <el-table-column prop="roleName" label="角色" min-width="120" />
-        <el-table-column prop="deptName" label="部门" min-width="140" />
-        <el-table-column label="状态" width="120">
+      <el-table :data="tableData" v-loading="loading" style="width: 100%" border>
+        <el-table-column label="头像" width="70" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">
+            <el-avatar :size="32" :src="row.avatar" style="background-color: #409eff">
+              {{ row.nickname?.[0]?.toUpperCase() || row.username?.[0]?.toUpperCase() }}
+            </el-avatar>
+          </template>
+        </el-table-column>
+        <el-table-column prop="username" label="用户名" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="nickname" label="昵称" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="roleName" label="角色" min-width="120">
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ row.roleName }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="deptName" label="部门" min-width="140" show-overflow-tooltip />
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small" effect="light" round>
               {{ row.status === 1 ? '启用' : '禁用' }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建时间" width="180">
+        <el-table-column label="创建时间" width="170">
           <template #default="{ row }">{{ formatTime(row.createTime) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button type="warning" link size="small" @click="openResetPwd(row)">重置密码</el-button>
-            <el-button type="danger" link size="small" @click="onDelete(row)">删除</el-button>
+            <el-tooltip content="编辑" placement="top">
+              <el-button type="primary" link :icon="Edit" @click="openEdit(row)" />
+            </el-tooltip>
+            <el-tooltip content="重置密码" placement="top">
+              <el-button type="warning" link :icon="Key" @click="openResetPwd(row)" />
+            </el-tooltip>
+            <el-tooltip content="删除" placement="top">
+              <el-button type="danger" link :icon="Delete" @click="onDelete(row)" />
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
-      <el-empty v-if="!loading && tableData.length === 0" description="暂无数据" />
 
       <div class="pagination">
         <el-pagination
@@ -290,36 +332,60 @@ watch(
     </el-card>
 
     <el-dialog v-model="dialogVisible" :title="dialogTitle" width="560px" destroy-on-close>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px">
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" :disabled="!!form.id" />
-        </el-form-item>
+      <el-form ref="formRef" :model="form" :rules="rules" label-width="80px">
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="用户名" prop="username">
+              <el-input v-model="form.username" :disabled="!!form.id" :prefix-icon="User" placeholder="登录账号" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="昵称">
+              <el-input v-model="form.nickname" :prefix-icon="Postcard" placeholder="显示名称" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
         <el-form-item v-if="!form.id" label="密码" prop="password">
-          <el-input v-model="form.password" type="password" show-password />
+          <el-input v-model="form.password" type="password" show-password :prefix-icon="Lock" placeholder="初始密码" />
         </el-form-item>
-        <el-form-item label="昵称">
-          <el-input v-model="form.nickname" />
-        </el-form-item>
-        <el-form-item label="邮箱">
-          <el-input v-model="form.email" />
-        </el-form-item>
-        <el-form-item label="手机号">
-          <el-input v-model="form.phone" />
-        </el-form-item>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="角色" prop="roleId">
+              <el-select v-model="form.roleId" clearable placeholder="选择角色" style="width: 100%">
+                <el-option v-for="r in roleOptions" :key="r.id" :label="r.name" :value="r.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="部门">
+              <el-select v-model="form.deptId" clearable placeholder="选择部门" style="width: 100%">
+                <template #prefix><el-icon><OfficeBuilding /></el-icon></template>
+                <el-option v-for="d in deptOptions" :key="d.id" :label="d.name" :value="d.id" />
+              </el-select>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <el-form-item label="手机">
+              <el-input v-model="form.phone" :prefix-icon="Iphone" placeholder="手机号码" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="邮箱">
+              <el-input v-model="form.email" :prefix-icon="Message" placeholder="电子邮箱" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
         <el-form-item label="头像">
-          <el-input v-model="form.avatar" />
+          <el-input v-model="form.avatar" :prefix-icon="Postcard" placeholder="头像链接" />
         </el-form-item>
-        <el-form-item label="角色">
-          <el-select v-model="form.roleId" clearable placeholder="请选择角色">
-            <el-option v-for="r in roleOptions" :key="r.id" :label="r.name" :value="r.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="部门">
-          <el-select v-model="form.deptId" clearable placeholder="请选择部门">
-            <el-option v-for="d in deptOptions" :key="d.id" :label="d.name" :value="d.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="状态">
+
+        <el-form-item label="状态" prop="status">
           <el-radio-group v-model="form.status">
             <el-radio :label="1">启用</el-radio>
             <el-radio :label="0">禁用</el-radio>
@@ -335,7 +401,7 @@ watch(
     <el-dialog v-model="resetPwdDialogVisible" title="重置密码" width="420px" destroy-on-close>
       <el-form ref="resetPwdRef" :model="resetPwdForm" :rules="resetPwdRules" label-width="110px">
         <el-form-item label="新密码" prop="newPassword">
-          <el-input v-model="resetPwdForm.newPassword" type="password" show-password />
+          <el-input v-model="resetPwdForm.newPassword" type="password" show-password :prefix-icon="Lock" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -351,20 +417,6 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.filters {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 12px;
 }
 
 .pagination {

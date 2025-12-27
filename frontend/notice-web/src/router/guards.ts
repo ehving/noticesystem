@@ -2,15 +2,27 @@ import type { NavigationGuardNext, RouteLocationNormalized, Router } from 'vue-r
 import { useAuthStore } from '@/stores/auth'
 import { error as showError } from '@/utils/message'
 import { setNavigate } from '@/api/http'
-import { getDeviceType, isMobileByWidth } from '@/utils/device'
+import { getDeviceType, isMobileByWidth, onDeviceChange } from '@/utils/device'
 
 const getHomeRedirect = (authStore: ReturnType<typeof useAuthStore>) => {
   const isMobile = isMobileByWidth()
   if (isMobile) {
-    if (!authStore.isLoggedIn) return '/login?redirect=/m/dashboard'
-    return authStore.isAdmin ? '/m/dashboard' : '/mobile-not-supported'
+    if (!authStore.isLoggedIn) return '/login?redirect=/m/MSyncLogReport'
+    return authStore.isAdmin ? '/m/MSyncLogReport' : '/mobile-not-supported'
   }
   return authStore.isAdmin ? '/admin/notices' : '/notices'
+}
+
+const ensureProfile = async (authStore: ReturnType<typeof useAuthStore>) => {
+  if (!authStore.token) return false
+  if (authStore.profile || authStore.loadingProfile) return true
+  try {
+    await authStore.fetchProfile()
+    return true
+  } catch {
+    authStore.clearAuth()
+    return false
+  }
 }
 
 export const setupGuards = (router: Router) => {
@@ -22,22 +34,18 @@ export const setupGuards = (router: Router) => {
     const authStore = useAuthStore()
     const isMobile = isMobileByWidth()
 
-    // 根路径分流
     if (to.path === '/') {
       return next(getHomeRedirect(authStore))
     }
 
-    // PC 页在移动端访问 -> 提示
     if (to.meta?.desktopOnly && isMobile) {
       return next({ path: '/mobile-not-supported', query: { from: to.fullPath } })
     }
 
-    // 移动端页在 PC 访问 -> 跳 PC 报表或登录
     if (to.meta?.mobileOnly && !isMobile) {
       return next('/admin/reports')
     }
 
-    // 登录页已登录
     if (to.path === '/login' && authStore.isLoggedIn) {
       return next(getHomeRedirect(authStore))
     }
@@ -45,16 +53,15 @@ export const setupGuards = (router: Router) => {
     const requiresAuth = to.meta?.requiresAuth
     const roles = (to.meta?.roles as string[] | undefined) ?? []
 
-    if (requiresAuth) {
-      if (!authStore.token) {
+    if (requiresAuth && !authStore.token) {
+      return next({ path: '/login', query: { redirect: to.fullPath } })
+    }
+
+    // 确保 profile 已加载（roles 校验前）
+    if (authStore.token && (requiresAuth || roles.length > 0)) {
+      const ok = await ensureProfile(authStore)
+      if (!ok) {
         return next({ path: '/login', query: { redirect: to.fullPath } })
-      }
-      if (!authStore.profile && !authStore.loadingProfile) {
-        try {
-          await authStore.fetchProfile()
-        } catch {
-          return next({ path: '/login', query: { redirect: to.fullPath } })
-        }
       }
     }
 
@@ -63,7 +70,6 @@ export const setupGuards = (router: Router) => {
       const allowed = roles.includes(roleName)
       if (!allowed) {
         showError('无访问权限')
-        // 移动端角色失败也提示页
         return next(isMobile ? '/mobile-not-supported' : '/notices')
       }
     }
@@ -76,9 +82,8 @@ export const setupGuards = (router: Router) => {
     document.title = `${title} - 公告管理系统`
   })
 
-  // 设备变化监听：窗口尺寸变化自动分流
   let lastType = getDeviceType()
-  window.addEventListener('resize', () => {
+  onDeviceChange(() => {
     const current = getDeviceType()
     if (current === lastType) return
     lastType = current

@@ -1,8 +1,9 @@
 package com.notice.system.vo.synclog;
 
-import com.notice.system.sync.DatabaseType;
-import com.notice.system.sync.SyncAction;
-import com.notice.system.sync.SyncEntityType;
+import com.notice.system.entityEnum.DatabaseType;
+import com.notice.system.entityEnum.SyncAction;
+import com.notice.system.entityEnum.SyncEntityType;
+import com.notice.system.entityEnum.SyncLogStatus;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -35,7 +36,7 @@ public class SyncLogVo {
     private DatabaseType targetDb;
 
     /** 过滤条件：状态 SUCCESS / FAILED，可选 */
-    private String status;
+    private SyncLogStatus status;
 
     /** 起始时间（按 createTime 过滤），可选 */
     private LocalDateTime beginTime;

@@ -2,7 +2,7 @@ package com.notice.system.support.task;
 
 import com.notice.system.common.GlobalProperties;
 import com.notice.system.service.SyncService;
-import com.notice.system.sync.DatabaseType;
+import com.notice.system.entityEnum.DatabaseType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;

@@ -1,20 +1,21 @@
 package com.notice.system.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.notice.system.entity.SyncLog;
-import com.notice.system.support.event.SyncLogEvent;
+import com.notice.system.entityEnum.DatabaseType;
+import com.notice.system.entityEnum.SyncAction;
+import com.notice.system.entityEnum.SyncEntityType;
+import com.notice.system.entityEnum.SyncLogStatus;
+import com.notice.system.entityEnum.aggBy.SyncLogAggBy;
 import com.notice.system.mapper.base.SyncLogBaseMapper;
 import com.notice.system.mapper.dto.SyncLogDailyStat;
-import com.notice.system.service.MailService;
 import com.notice.system.service.SyncLogService;
 import com.notice.system.service.SyncService;
 import com.notice.system.service.base.MultiDbSyncServiceImpl;
-import com.notice.system.sync.DatabaseType;
-import com.notice.system.sync.SyncAction;
-import com.notice.system.sync.SyncEntityType;
+import com.notice.system.support.event.SyncLogEvent;
 import com.notice.system.sync.SyncMetadataRegistry;
+import com.notice.system.vo.report.AggVo;
 import com.notice.system.vo.synclog.SyncLogDailyReportVo;
 import com.notice.system.vo.synclog.SyncLogVo;
 import lombok.extern.slf4j.Slf4j;
@@ -22,389 +23,387 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.*;
 
+/**
+ * 同步日志服务：
+ * <ul>
+ *   <li>监听 SyncLogEvent 落库（日志表自身不再写日志，避免递归）</li>
+ *   <li>提供：分页查询、聚合报表、清理、按日志重试、SUCCESS 日志去重扫描</li>
+ * </ul>
+ */
 @Slf4j
 @Service
-public class SyncLogServiceImpl
-        extends MultiDbSyncServiceImpl<SyncLog>
-        implements SyncLogService {
+public class SyncLogServiceImpl extends MultiDbSyncServiceImpl<SyncLog> implements SyncLogService {
 
-    private final MailService mailService;
+    private static final int MAX_FAIL = 3;
 
-    public SyncLogServiceImpl(SyncService syncService,
-                              SyncMetadataRegistry metadataRegistry,MailService mailService) {
-        // 默认把 MySQL 作为日志的源库
+    public SyncLogServiceImpl(SyncService syncService, SyncMetadataRegistry metadataRegistry) {
         super(syncService, metadataRegistry, SyncEntityType.SYNC_LOG, DatabaseType.MYSQL);
-        this.mailService = mailService;
     }
 
-    /* ========== 事件监听：真正落库逻辑 ========== */
+    /* ======================== Event -> 落库 ======================== */
 
+    /** 监听同步事件并记录日志（日志表自身不再写日志，避免递归）。 */
     @EventListener
     public void handleSyncLogEvent(SyncLogEvent event) {
-        if (event.isSuccess()) {
-            recordSuccess(
-                    event.getEntityType(),
-                    event.getEntityId(),
-                    event.getAction(),
-                    event.getSourceDb(),
-                    event.getTargetDb()
-            );
-        } else {
-            recordFailure(
-                    event.getEntityType(),
-                    event.getEntityId(),
-                    event.getAction(),
-                    event.getSourceDb(),
-                    event.getTargetDb(),
-                    event.getErrorMsg()
-            );
-        }
-    }
+        if (event == null || event.entityType() == null) return;
 
-    /* ========== 记录日志 ========== */
+        if (!shouldLogEntity(event.entityType())) return;
 
-    @Override
-    public void recordSuccess(SyncEntityType entityType,
-                              String entityId,
-                              SyncAction action,
-                              DatabaseType sourceDb,
-                              DatabaseType targetDb) {
-        SyncLog logRecord = buildBaseLog(entityType, entityId, action, sourceDb, targetDb);
-        logRecord.setStatus("SUCCESS");
-        logRecord.setErrorMsg(null);
-        logRecord.setRetryCount(0);
-        // 写入默认库（MySQL），MultiDbSyncServiceImpl 会以 MYSQL 为源库触发同步
-        this.save(logRecord);
-    }
-
-    @Override
-    public void recordFailure(SyncEntityType entityType,
-                              String entityId,
-                              SyncAction action,
-                              DatabaseType sourceDb,
-                              DatabaseType targetDb,
-                              String errorMsg) {
-        SyncLog logRecord = buildBaseLog(entityType, entityId, action, sourceDb, targetDb);
-        logRecord.setStatus("FAILED");
-        logRecord.setErrorMsg(errorMsg);
-        logRecord.setRetryCount(0);
-
-        // 1. 保存日志（默认写到 MYSQL，并通过同步机制推给其它库）
-        this.save(logRecord);
-
-        // 2. 只有“疑似数据冲突”的错误才发邮件
-        if (isConflictError(action, errorMsg)) {
-            try {
-                mailService.sendSyncConflictAlert(logRecord);
-            } catch (Exception e) {
-                log.warn("[SYNC-LOG] 发送冲突告警邮件失败，logId={}，错误={}",
-                        logRecord.getId(), e.getMessage(), e);
-            }
-        }
-    }
-
-    private SyncLog buildBaseLog(SyncEntityType entityType,
-                                 String entityId,
-                                 SyncAction action,
-                                 DatabaseType sourceDb,
-                                 DatabaseType targetDb) {
         SyncLog logRecord = new SyncLog();
-        logRecord.setEntityType(entityType.name());
-        logRecord.setEntityId(entityId);
-        logRecord.setAction(action.name());
-        logRecord.setSourceDb(sourceDb.name());
-        logRecord.setTargetDb(targetDb.name());
-        LocalDateTime now = LocalDateTime.now();
-        logRecord.setCreateTime(now);
-        logRecord.setUpdateTime(now);
-        return logRecord;
+        logRecord.setEntityType(event.entityType());
+        logRecord.setEntityId(event.entityId());
+        logRecord.setAction(event.action());
+        logRecord.setSourceDb(event.sourceDb());
+        logRecord.setTargetDb(event.targetDb());
+        logRecord.setStatus(event.status());
+        logRecord.setErrorMsg(event.errorMsg());
+        logRecord.setRetryCount(0);
+
+        // 落到默认日志库，然后由 MultiDbSyncService 自动同步到其它库
+        save(logRecord);
     }
 
-    /* ========== 分页 / 查询 / 重试计数 ========== */
+    private boolean shouldLogEntity(SyncEntityType type) {
+        return type != SyncEntityType.SYNC_LOG
+                && type != SyncEntityType.SYNC_CONFLICT
+                && type != SyncEntityType.SYNC_CONFLICT_ITEM;
+    }
+
+    /* ======================== 分页查询 ======================== */
 
     @Override
     public Page<SyncLog> pageLogs(DatabaseType logDb, SyncLogVo vo) {
-        DatabaseType db = (logDb == null ? defaultDb() : logDb);
-        BaseMapper<SyncLog> mapper = resolveMapper(db);
-        if (mapper == null) {
-            log.warn("[SYNC-LOG] pageLogs 时未找到 mapper，db={}", db);
-            return new Page<>(vo.getPageNo(), vo.getPageSize());
+        DatabaseType db = useDb(logDb);
+        SyncLogVo q = (vo == null ? new SyncLogVo() : vo);
+
+        long pageNoRaw = q.getPageNo();
+        long pageSizeRaw = q.getPageSize();
+
+        long pageNo = pageNoRaw <= 0 ? 1L : pageNoRaw;
+        long pageSize = pageSizeRaw <= 0 ? 10L : pageSizeRaw;
+
+        Page<SyncLog> page = new Page<>(pageNo, pageSize);
+
+        LambdaQueryWrapper<SyncLog> w = new LambdaQueryWrapper<>();
+
+        if (q.getEntityType() != null) w.eq(SyncLog::getEntityType, q.getEntityType());
+        if (q.getAction() != null)     w.eq(SyncLog::getAction, q.getAction());
+        if (q.getSourceDb() != null)   w.eq(SyncLog::getSourceDb, q.getSourceDb());
+        if (q.getTargetDb() != null)   w.eq(SyncLog::getTargetDb, q.getTargetDb());
+        if (q.getStatus() != null)     w.eq(SyncLog::getStatus, q.getStatus());
+
+        String entityId = (q.getEntityId() == null ? null : q.getEntityId().trim());
+        if (entityId != null && !entityId.isEmpty()) {
+            w.eq(SyncLog::getEntityId, entityId);
         }
 
-        Page<SyncLog> page = new Page<>(vo.getPageNo(), vo.getPageSize());
-        LambdaQueryWrapper<SyncLog> wrapper = new LambdaQueryWrapper<>();
+        if (q.getBeginTime() != null) w.ge(SyncLog::getCreateTime, q.getBeginTime());
+        if (q.getEndTime() != null)   w.le(SyncLog::getCreateTime, q.getEndTime());
 
-        if (vo.getEntityType() != null) {
-            wrapper.eq(SyncLog::getEntityType, vo.getEntityType().name());
-        }
-        if (vo.getEntityId() != null) {
-            wrapper.eq(SyncLog::getEntityId, vo.getEntityId());
-        }
-        if (vo.getAction() != null) {
-            wrapper.eq(SyncLog::getAction, vo.getAction().name());
-        }
-        if (vo.getSourceDb() != null) {
-            wrapper.eq(SyncLog::getSourceDb, vo.getSourceDb().name());
-        }
-        if (vo.getTargetDb() != null) {
-            wrapper.eq(SyncLog::getTargetDb, vo.getTargetDb().name());
-        }
-        if (vo.getStatus() != null) {
-            wrapper.eq(SyncLog::getStatus, vo.getStatus());
-        }
-        if (vo.getBeginTime() != null) {
-            wrapper.ge(SyncLog::getCreateTime, vo.getBeginTime());
-        }
-        if (vo.getEndTime() != null) {
-            wrapper.le(SyncLog::getCreateTime, vo.getEndTime());
-        }
+        w.orderByDesc(SyncLog::getCreateTime);
 
-        wrapper.orderByDesc(SyncLog::getCreateTime);
-
-        return mapper.selectPage(page, wrapper);
+        return resolveMapper(db).selectPage(page, w);
     }
 
     @Override
     public SyncLog getById(DatabaseType logDb, String id) {
-        DatabaseType db = (logDb == null ? defaultDb() : logDb);
-        return super.getById(db, id);
+        return super.getById(useDb(logDb), id);
     }
+
+    /* ======================== 重试计数 ======================== */
 
     @Override
     public void incrementRetryCount(DatabaseType logDb, String logId) {
-        if (logId == null) {
-            return;
-        }
-        DatabaseType db = (logDb == null ? defaultDb() : logDb);
+        if (logId == null || logId.isBlank()) return;
 
-        SyncLog logRecord = this.getById(db, logId);
-        if (logRecord == null) {
-            return;
-        }
+        DatabaseType db = useDb(logDb);
+        SyncLog logRecord = getById(db, logId);
+        if (logRecord == null) return;
 
-        Integer oldCount = logRecord.getRetryCount();
-        if (oldCount == null) {
-            oldCount = 0;
-        }
+        int oldCount = (logRecord.getRetryCount() == null ? 0 : logRecord.getRetryCount());
         logRecord.setRetryCount(oldCount + 1);
         logRecord.setUpdateTime(LocalDateTime.now());
 
-        // 在指定库更新，并以该库为源库触发同步
-        this.updateByIdInDb(db, logRecord);
+        updateByIdInDb(db, logRecord);
     }
+
+    /* ======================== 按日志重试同步 ======================== */
 
     @Override
     public boolean retrySyncByLogId(DatabaseType logDb, String logId) {
-        if (logId == null || logId.isBlank()) {
-            return false;
-        }
+        if (logId == null || logId.isBlank()) return false;
 
-        DatabaseType db = (logDb == null ? defaultDb() : logDb);
+        DatabaseType db = useDb(logDb);
 
-        // 1. 先从指定日志库查出这条日志
-        SyncLog logRecord = this.getById(db, logId);
+        SyncLog logRecord = getById(db, logId);
         if (logRecord == null) {
-            log.warn("[SYNC-LOG] retrySyncByLogId 失败，日志不存在，logDb={}，logId={}", db, logId);
+            log.warn("[SYNC-LOG] retry failed: not found, db={}, logId={}", db, logId);
             return false;
         }
 
         int oldRetry = (logRecord.getRetryCount() == null ? 0 : logRecord.getRetryCount());
+        if (logRecord.getStatus() == SyncLogStatus.ERROR && oldRetry >= MAX_FAIL) {
+            log.warn("[SYNC-LOG] retry refused: status=ERROR and max reached, db={}, logId={}, retryCount={}",
+                    db, logId, oldRetry);
+            return false;
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        int newRetry = oldRetry + 1;
+
+        // 1) 字段校验（不可重试则直接 ERROR）
+        String invalidMsg = validateRetryable(logRecord);
+        if (invalidMsg != null) {
+            markUnretryable(db, logRecord, newRetry, now, invalidMsg);
+            return false;
+        }
+
+        // 2) 发起重试
+        SyncEntityType entityType = logRecord.getEntityType();
+        SyncAction action = logRecord.getAction();
+        DatabaseType sourceDb = logRecord.getSourceDb();
+        DatabaseType targetDb = logRecord.getTargetDb();
+        String entityId = logRecord.getEntityId();
 
         try {
-            // 2. 从日志记录中还原出同步的关键信息
-            SyncEntityType entityType = SyncEntityType.valueOf(logRecord.getEntityType());
-            SyncAction action = SyncAction.valueOf(logRecord.getAction());
-            DatabaseType sourceDb = DatabaseType.valueOf(logRecord.getSourceDb());
-            DatabaseType targetDb = DatabaseType.valueOf(logRecord.getTargetDb());
-            String entityId = logRecord.getEntityId();
-
-            if (entityId == null || entityId.isBlank()) {
-                log.warn("[SYNC-LOG] retrySyncByLogId 失败，日志缺少 entityId，logId={}", logId);
-                return false;
-            }
-
-            // 3. 针对这条日志记录的来源/目标库，重试一次同步
             boolean ok = syncService.syncToTargetWithoutLog(entityType, entityId, action, sourceDb, targetDb);
 
-            // 4. 更新日志的状态 / 重试次数 / 时间 / 错误信息
-            logRecord.setRetryCount(oldRetry + 1);
-            logRecord.setUpdateTime(LocalDateTime.now());
+            logRecord.setRetryCount(newRetry);
+            logRecord.setUpdateTime(now);
 
             if (ok) {
-                logRecord.setStatus("SUCCESS");
+                logRecord.setStatus(SyncLogStatus.SUCCESS);
                 logRecord.setErrorMsg(null);
-                log.info("[SYNC-LOG] retrySyncByLogId 成功，logDb={}，logId={}，{} {} {} -> {}",
+                log.info("[SYNC-LOG] retry ok: db={}, logId={}, {} {} {} -> {}",
                         db, logId, entityType, action, sourceDb, targetDb);
             } else {
-                logRecord.setStatus("FAILED");
-                logRecord.setErrorMsg("重试同步仍失败，请查看最近失败日志详情");
-                log.warn("[SYNC-LOG] retrySyncByLogId 失败（syncService 返回 false），logDb={}，logId={}，{} {} {} -> {}",
-                        db, logId, entityType, action, sourceDb, targetDb);
+                markRetryFailed(logRecord, newRetry);
+                log.warn("[SYNC-LOG] retry failed: db={}, logId={}, retryCount={}, {} {} {} -> {}",
+                        db, logId, newRetry, entityType, action, sourceDb, targetDb);
             }
 
-            // 使用带选库的更新，按该日志库为源库同步
-            this.updateByIdInDb(db, logRecord);
-
+            updateByIdInDb(db, logRecord);
             return ok;
-        } catch (Exception e) {
-            // 枚举解析 / syncToTarget 抛异常也要更新日志
-            logRecord.setRetryCount(oldRetry + 1);
-            logRecord.setStatus("FAILED");
-            logRecord.setErrorMsg(e.getMessage());
-            logRecord.setUpdateTime(LocalDateTime.now());
-            this.updateByIdInDb(db, logRecord);
 
-            log.warn("[SYNC-LOG] retrySyncByLogId 异常，logDb={}，logId={}，错误={}",
-                    db, logId, e.getMessage(), e);
+        } catch (Exception e) {
+            logRecord.setRetryCount(newRetry);
+            logRecord.setUpdateTime(now);
+            logRecord.setStatus(newRetry >= MAX_FAIL ? SyncLogStatus.ERROR : SyncLogStatus.FAILED);
+
+            String msg = (e.getMessage() == null || e.getMessage().isBlank())
+                    ? e.getClass().getSimpleName()
+                    : e.getMessage();
+            logRecord.setErrorMsg(msg);
+
+            updateByIdInDb(db, logRecord);
+            log.warn("[SYNC-LOG] retry exception: db={}, logId={}, retryCount={}, err={}", db, logId, newRetry, msg, e);
             return false;
         }
     }
 
+    /** 返回 null 表示可重试；非 null 表示不可重试原因。 */
+    private String validateRetryable(SyncLog logRecord) {
+        if (logRecord.getEntityType() == null
+                || logRecord.getAction() == null
+                || logRecord.getSourceDb() == null
+                || logRecord.getTargetDb() == null) {
+            return "重试失败：日志字段缺失（不可重试）";
+        }
+        if (logRecord.getEntityId() == null || logRecord.getEntityId().isBlank()) {
+            return "重试失败：日志缺少 entityId（不可重试）";
+        }
+        return null;
+    }
+
+    private void markRetryFailed(SyncLog logRecord, int newRetry) {
+        if (newRetry >= MAX_FAIL) {
+            logRecord.setStatus(SyncLogStatus.ERROR);
+            logRecord.setErrorMsg("重试同步失败已达 3 次，已标记为 ERROR，请人工介入处理");
+        } else {
+            logRecord.setStatus(SyncLogStatus.FAILED);
+            logRecord.setErrorMsg("重试同步仍失败，请查看失败日志详情");
+        }
+    }
+
+    private void markUnretryable(DatabaseType db, SyncLog logRecord, int newRetry, LocalDateTime now, String msg) {
+        logRecord.setRetryCount(newRetry);
+        logRecord.setStatus(SyncLogStatus.ERROR);
+        logRecord.setErrorMsg(msg);
+        logRecord.setUpdateTime(now);
+        updateByIdInDb(db, logRecord);
+    }
+
+    /* ======================== 日报（SQL） ======================== */
+
     @Override
     public List<SyncLogDailyReportVo> listDailyReport(DatabaseType logDb, SyncLogVo condition) {
-        DatabaseType db = (logDb == null ? defaultDb() : logDb);
+        DatabaseType db = useDb(logDb);
         SyncLogVo vo = (condition == null ? new SyncLogVo() : condition);
 
-        SyncMetadataRegistry.EntitySyncDefinition<SyncLog> def =
-                metadataRegistry.getDefinition(SyncEntityType.SYNC_LOG);
-        if (def == null) {
-            log.warn("[SYNC-LOG] listDailyReport 时未在 SyncMetadataRegistry 中找到 SYNC_LOG 定义");
-            return java.util.Collections.emptyList();
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime end = (vo.getEndTime() == null ? now : vo.getEndTime());
+        LocalDateTime begin = (vo.getBeginTime() == null
+                ? now.minusDays(6).toLocalDate().atStartOfDay()
+                : vo.getBeginTime());
+        if (begin.isAfter(end)) {
+            LocalDateTime tmp = begin; begin = end; end = tmp;
         }
 
-        BaseMapper<SyncLog> baseMapper = def.getMapper(db);
-        if (!(baseMapper instanceof SyncLogBaseMapper syncLogMapper)) {
-            log.warn("[SYNC-LOG] listDailyReport 时 Mapper 未实现 SyncLogBaseMapper，db={}", db);
-            return java.util.Collections.emptyList();
-        }
+        SyncLogBaseMapper mapper = resolveMapperAs(db, SyncLogBaseMapper.class);
 
-        // ====== 关键：把枚举转换成 String 传给 Mapper ======
-        String entityTypeStr = (vo.getEntityType() == null ? null : vo.getEntityType().name());
-        String actionStr     = (vo.getAction()     == null ? null : vo.getAction().name());
-        String statusStr     = vo.getStatus();  // 你之前就是 String，这里直接用
-
-        String sourceDbStr   = (vo.getSourceDb() == null ? null : vo.getSourceDb().name());
-        String targetDbStr   = (vo.getTargetDb() == null ? null : vo.getTargetDb().name());
-
-        List<SyncLogDailyStat> stats = syncLogMapper.listDailyStats(
-                vo.getBeginTime(),
-                vo.getEndTime(),
-                entityTypeStr,
-                actionStr,
-                statusStr,
-                sourceDbStr,
-                targetDbStr
+        List<SyncLogDailyStat> stats = mapper.listDailyStats(
+                begin, end,
+                vo.getEntityType() == null ? null : vo.getEntityType().name(),
+                vo.getAction() == null ? null : vo.getAction().name(),
+                vo.getStatus() == null ? null : vo.getStatus().name(),
+                vo.getSourceDb() == null ? null : vo.getSourceDb().name(),
+                vo.getTargetDb() == null ? null : vo.getTargetDb().name()
         );
+        if (stats == null || stats.isEmpty()) return Collections.emptyList();
 
-        // ====== 转成返回给前端的 VO ======
-        List<SyncLogDailyReportVo> result = new java.util.ArrayList<>();
-        if (stats != null) {
-            for (SyncLogDailyStat stat : stats) {
-                if (stat == null) continue;
-
-                SyncLogDailyReportVo r = new SyncLogDailyReportVo();
-                r.setStatDate(stat.getStatDate() != null ? stat.getStatDate().toString() : null);
-                r.setSourceDb(stat.getSourceDb());
-                r.setTargetDb(stat.getTargetDb());
-                r.setTotalCount(stat.getTotalCount());
-                r.setSuccessCount(stat.getSuccessCount());
-                r.setFailedCount(stat.getFailedCount());
-
-                long total  = stat.getTotalCount()  == null ? 0L : stat.getTotalCount();
-                long failed = stat.getFailedCount() == null ? 0L : stat.getFailedCount();
-                double rate = (total == 0L ? 0.0 : (failed * 1.0 / total));
-                r.setFailedRate(rate);
-
-                result.add(r);
-            }
+        List<SyncLogDailyReportVo> result = new ArrayList<>(stats.size());
+        for (SyncLogDailyStat stat : stats) {
+            if (stat == null) continue;
+            SyncLogDailyReportVo r = new SyncLogDailyReportVo();
+            r.setStatDate(stat.getStatDate() == null ? null : stat.getStatDate().toString());
+            r.setSourceDb(stat.getSourceDb());
+            r.setTargetDb(stat.getTargetDb());
+            r.setTotalCount(stat.getTotalCount());
+            r.setSuccessCount(stat.getSuccessCount());
+            r.setFailedCount(stat.getFailedCount());
+            r.setConflictCount(stat.getConflictCount());
+            r.setErrorCount(stat.getErrorCount());
+            result.add(r);
         }
-
         return result;
     }
+
+    /* ======================== 清理（存储过程） ======================== */
 
     @Override
     public long cleanLogsInDb(DatabaseType db, Integer retainDays, Long maxCount) {
         DatabaseType useDb = (db == null ? DatabaseType.MYSQL : db);
 
-        int  days = (retainDays == null || retainDays <= 0) ? 90     : retainDays;
-        long max  = (maxCount   == null || maxCount   <= 0) ? 100000L: maxCount;
+        int days = (retainDays == null || retainDays <= 0) ? 90 : retainDays;
+        long max = (maxCount == null || maxCount <= 0) ? 100000L : maxCount;
 
-        SyncMetadataRegistry.EntitySyncDefinition<SyncLog> def =
-                metadataRegistry.getDefinition(SyncEntityType.SYNC_LOG);
-        if (def == null) {
-            log.warn("[SYNC-LOG] cleanLogsInDb 未在 SyncMetadataRegistry 中找到 SYNC_LOG 定义");
-            return 0L;
-        }
+        SyncLogBaseMapper mapper = resolveMapperAs(useDb, SyncLogBaseMapper.class);
 
-        BaseMapper<SyncLog> baseMapper = def.getMapper(useDb);
-        if (!(baseMapper instanceof SyncLogBaseMapper syncLogMapper)) {
-            log.warn("[SYNC-LOG] cleanLogsInDb 时 Mapper 未实现 SyncLogBaseMapper，db={}", useDb);
-            return 0L;
-        }
+        long before = Optional.ofNullable(resolveMapper(useDb).selectCount(null)).orElse(0L);
+        mapper.callCleanProc(days, max);
+        long after = Optional.ofNullable(resolveMapper(useDb).selectCount(null)).orElse(0L);
 
-        Long before = baseMapper.selectCount(null);
-
-        // 调用对应库的存储过程：sp_clean_sync_log
-        syncLogMapper.callCleanProc(days, max);
-
-        Long after = baseMapper.selectCount(null);
-
-        long deleted = 0L;
-        if (before != null && after != null && before > after) {
-            deleted = before - after;
-        }
-
-        log.info("[SYNC-LOG] cleanLogsInDb 完成，db={}，删除条数={}", useDb, deleted);
+        long deleted = Math.max(0L, before - after);
+        log.info("[SYNC-LOG] clean done: db={}, deleted={}", useDb, deleted);
         return deleted;
     }
 
+    /* ======================== SUCCESS 日志扫描（Conflict 用） ======================== */
 
+    @Override
+    public List<SyncLog> listRecentSuccessLogsDedup(LocalDateTime fromTime,
+                                                    LocalDateTime toTime,
+                                                    int perDbLimit,
+                                                    int entityLimit) {
+        int perLim = perDbLimit <= 0 ? 200 : perDbLimit;
+        int entLim = entityLimit <= 0 ? 200 : entityLimit;
 
-    /**
-     * 判断是否为“数据冲突类错误”：
-     *  - 只针对 CREATE / UPDATE
-     *  - 只匹配主键 / 唯一约束相关错误关键字
-     */
-    private boolean isConflictError(SyncAction action, String errorMsg) {
-        if (errorMsg == null || errorMsg.isBlank()) {
-            return false;
+        List<SyncLog> all = new ArrayList<>(perLim * 3);
+
+        for (DatabaseType eachDb : DatabaseType.all()) {
+            try {
+                SyncLogBaseMapper mapper = resolveMapperAs(eachDb, SyncLogBaseMapper.class);
+                List<SyncLog> part = mapper.listRecentSuccessLogs(fromTime, toTime, perLim);
+                if (part != null && !part.isEmpty()) all.addAll(part);
+            } catch (Exception e) {
+                // 单库异常不影响整体扫描
+                log.warn("[SYNC-LOG] recentSuccess query failed, db={}, err={}", eachDb, e.getMessage(), e);
+            }
         }
 
-        // DELETE 基本不会产生“冲突”，直接排除
-        if (action == SyncAction.DELETE) {
-            return false;
+        if (all.isEmpty()) return Collections.emptyList();
+
+        // 按 (entityType, entityId) 去重：保留最新一条
+        Map<String, SyncLog> latest = new LinkedHashMap<>();
+        for (SyncLog l : all) {
+            if (l == null || l.getEntityType() == null || l.getEntityId() == null) continue;
+
+            String key = l.getEntityType() + "|" + l.getEntityId();
+            SyncLog prev = latest.get(key);
+
+            if (prev == null) {
+                latest.put(key, l);
+                continue;
+            }
+
+            LocalDateTime t1 = nvlTime(prev.getUpdateTime(), prev.getCreateTime());
+            LocalDateTime t2 = nvlTime(l.getUpdateTime(), l.getCreateTime());
+            if (t2 != null && (t1 == null || t2.isAfter(t1))) {
+                latest.put(key, l);
+            }
         }
 
-        String lower = errorMsg.toLowerCase();
+        return latest.values().stream()
+                .sorted((a, b) -> {
+                    LocalDateTime ta = nvlTime(a.getUpdateTime(), a.getCreateTime());
+                    LocalDateTime tb = nvlTime(b.getUpdateTime(), b.getCreateTime());
+                    if (ta == null && tb == null) return 0;
+                    if (ta == null) return 1;
+                    if (tb == null) return -1;
+                    return tb.compareTo(ta);
+                })
+                .limit(entLim)
+                .toList();
+    }
 
-        // MySQL / 通用英文
-        if (lower.contains("duplicate entry")
-                || lower.contains("duplicate key")
-                || lower.contains("primary key")
-                || lower.contains("unique constraint")
-                || lower.contains("unique index")
-                || lower.contains("already exists")) {
-            return true;
-        }
+    /* ======================== 聚合报表（SQL） ======================== */
 
-        // PostgreSQL 常见文案
-        if (lower.contains("violates unique constraint")) {
-            return true;
-        }
+    @Override
+    public List<AggVo> aggLogs(DatabaseType db,
+                               LocalDateTime begin,
+                               LocalDateTime end,
+                               SyncLogAggBy by,
+                               SyncLogVo filter) {
+        DatabaseType useDb = useDb(db);
 
-        // SQL Server 常见文案（英文）
-        if (lower.contains("violation of unique key constraint")
-                || lower.contains("violation of primary key constraint")
-                || lower.contains("cannot insert duplicate key row")) {
-            return true;
-        }
+        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime b = (begin == null ? now.minusDays(6).toLocalDate().atStartOfDay() : begin);
+        LocalDateTime e = (end == null ? now : end);
+        if (b.isAfter(e)) { LocalDateTime tmp = b; b = e; e = tmp; }
+        if (by == null) throw new IllegalArgumentException("agg by 不能为空");
 
-        // 中文环境下可能出现的提示
-        return lower.contains("违反唯一约束")
-                || lower.contains("主键冲突")
-                || lower.contains("唯一约束");
+        SyncLogBaseMapper mapper = resolveMapperAs(useDb, SyncLogBaseMapper.class);
+
+        SyncLogVo f = (filter == null ? new SyncLogVo() : filter);
+        String groupCol = mapSyncLogGroupCol(useDb, by);
+
+        return mapper.agg(
+                b, e, groupCol,
+                f.getEntityType() == null ? null : f.getEntityType().name(),
+                f.getAction() == null ? null : f.getAction().name(),
+                f.getStatus() == null ? null : f.getStatus().name(),
+                f.getSourceDb() == null ? null : f.getSourceDb().name(),
+                f.getTargetDb() == null ? null : f.getTargetDb().name()
+        );
+    }
+
+    private String mapSyncLogGroupCol(DatabaseType db, SyncLogAggBy by) {
+        boolean isSqlServer = db == DatabaseType.SQLSERVER;
+        return switch (by) {
+            case STATUS      -> isSqlServer ? "l.[status]" : "l.status";
+            case ENTITY_TYPE -> "l.entity_type";
+            case ACTION      -> "l.action";
+            case SOURCE_DB   -> "l.source_db";
+            case TARGET_DB   -> "l.target_db";
+        };
+    }
+
+    private static LocalDateTime nvlTime(LocalDateTime a, LocalDateTime b) {
+        return a != null ? a : b;
     }
 }
+
+
 

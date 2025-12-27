@@ -1,22 +1,21 @@
 package com.notice.system.sync;
 
+import com.notice.system.entityEnum.DatabaseType;
+import com.notice.system.entityEnum.SyncAction;
+import com.notice.system.entityEnum.SyncEntityType;
+
 public interface SyncExecutor {
 
-    /**
-     * 该执行器对应的目标库
-     */
+    /** 返回当前执行器负责写入的目标库。 */
     DatabaseType targetDb();
 
-    /**
-     * 同步一条数据：
-     *  - 从 sourceDb 读取
-     *  - 写入到 targetDb（由实现类固定）
-     */
+    /** 从源库读取指定实体并将变更应用到目标库。 */
     void applyOne(SyncEntityType entityType,
                   SyncAction action,
                   String entityId,
                   DatabaseType sourceDb);
 }
+
 
 
 

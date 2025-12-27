@@ -1,12 +1,9 @@
 package com.notice.system.sync;
 
-import lombok.extern.slf4j.Slf4j;
+import com.notice.system.entityEnum.DatabaseType;
 import org.springframework.stereotype.Component;
 
-/**
- * 目标库为 PG 的同步执行器
- */
-@Slf4j
+/** 目标库为 PostgreSQL 的同步执行器。 */
 @Component
 public class PgSyncExecutor extends AbstractSyncExecutor {
 
@@ -14,6 +11,7 @@ public class PgSyncExecutor extends AbstractSyncExecutor {
         super(DatabaseType.PG, "[PG]", metadataRegistry);
     }
 }
+
 
 
 

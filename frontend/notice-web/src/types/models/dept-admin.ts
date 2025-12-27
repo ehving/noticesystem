@@ -9,3 +9,13 @@ export interface DeptAdminVo {
   createTime?: string
   updateTime?: string
 }
+
+export interface DeptTreeVo {
+  id: string
+  name: string
+  parentId?: string | null
+  sortOrder?: number | null
+  status?: number | null
+  children?: DeptTreeVo[]
+}
+

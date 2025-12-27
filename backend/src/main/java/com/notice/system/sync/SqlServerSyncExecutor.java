@@ -1,12 +1,9 @@
 package com.notice.system.sync;
 
-import lombok.extern.slf4j.Slf4j;
+import com.notice.system.entityEnum.DatabaseType;
 import org.springframework.stereotype.Component;
 
-/**
- * 目标库为 SQL Server 的同步执行器
- */
-@Slf4j
+/** 目标库为 SQL Server 的同步执行器。 */
 @Component
 public class SqlServerSyncExecutor extends AbstractSyncExecutor {
 
@@ -14,6 +11,7 @@ public class SqlServerSyncExecutor extends AbstractSyncExecutor {
         super(DatabaseType.SQLSERVER, "[SQLSERVER]", metadataRegistry);
     }
 }
+
 
 
 

@@ -17,4 +17,6 @@ public class SyncLogDailyStat {
     private Long totalCount;
     private Long successCount;
     private Long failedCount;
+    private Long conflictCount;
+    private Long errorCount;
 }

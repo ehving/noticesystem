@@ -1,16 +1,17 @@
 export interface UserProfileVo {
   id: string
   username: string
-  nickname: string
-  email: string
-  phone: string
-  avatar: string
+  nickname: string | null
+  email: string | null
+  phone: string | null
+  avatar: string | null
   status: number
-  roleId: string
-  roleName: string
-  deptId: string
-  deptName: string
-  lastLoginTime: string
-  createTime: string
-  updateTime: string
+  roleId: string | null
+  roleName: string | null
+  deptId: string | null
+  deptName: string | null
+  lastLoginTime: string | null
+  createTime: string | null
+  updateTime: string | null
 }
+
